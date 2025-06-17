@@ -27,17 +27,20 @@ class CloseTicketView(discord.ui.View):
             self.clear_items()
             await interaction.response.edit_message(view=self)
             
-            # Remove player from active tickets tracking
+            # Remove player from active tickets tracking (Discord bot)
             if self.player_name in self.discord_bot.player_tickets:
                 del self.discord_bot.player_tickets[self.player_name]
             
-            # Remove from active threads
+            # Remove from active threads (Discord bot)
             if self.player_name in self.discord_bot.active_threads:
                 del self.discord_bot.active_threads[self.player_name]
                 
-            # Remove from active button messages
+            # Remove from active button messages (Discord bot)
             if self.player_name in self.discord_bot.active_button_messages:
                 del self.discord_bot.active_button_messages[self.player_name]
+            
+            # FIXED: Also clean up CRCON client tracking
+            self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
             
             # Send confirmation message to player
             try:
