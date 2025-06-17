@@ -1,17 +1,213 @@
 # Hell Let Loose Admin Responder
 
-This project integrates a Hell Let Loose CRCON client with a Discord bot to provide seamless admin support. It monitors in-game chat for admin requests and creates Discord forum posts for efficient admin response management.
+Discord bot that automatically creates forum posts when players request admin help in-game. Admins can respond directly from Discord and messages are sent back to players.
 
 ## Features
 
-- **Real-time Monitoring**: Continuously monitors HLL server logs via CRCON API
-- **Forum Integration**: Creates Discord forum posts for each admin request with automatic tagging
-- **Two-way Communication**: Send replies from Discord directly back to players in-game
-- **Admin Controls**: Close ticket button with confirmation messages
-- **Smart Tagging**: Automatic forum tags (NEW → REPLIED → CLOSED)
-- **Admin Mentions**: Configurable role mentions for urgent requests
-- **Duplicate Prevention**: Intelligent tracking to prevent spam requests
-- **Timestamped Requests**: All requests include detailed timestamps
+- **Real-time Monitoring**: Watches HLL server for `!admin` commands
+- **Discord Forum Posts**: Auto-creates tickets with tagging (NEW/REPLIED/CLOSED)
+- **Two-way Chat**: Reply in Discord → message sent to player in-game
+- **Smart Prevention**: One ticket per player, prevents spam
+- **Auto-Start**: Runs on boot, restarts if crashed
+
+## Requirements
+
+- Linux VPS (Ubuntu 20.04+)
+- Python 3.8+
+- 512MB RAM minimum
+- CRCON server access
+- Discord bot
+
+## Mandatory CRCON Permissions
+
+Your CRCON account must have at least these permissions:
+- **api|rcon user|Can message players**
+- **api|logs|Can view logs**
+
+## Mandatory Discord Bot Permissions
+
+- Send Messages
+- Create Forum Posts
+- Manage Threads
+- Use External Emojis
+- Add Reactions
+- Mention Everyone (for admin role mentions)
+
+**Under Bot (Privileged Gateway Intents)**
+- Message Content Intent
+
+## Installation
+
+**1. Clone/Upload the Repository**
+   
+   Upload the project files to your Linux VPS or clone:
+   ```bash
+   git clone https://github.com/your-repo/HLL_Admin_Responder.git
+   cd HLL_Admin_Responder
+   ```
+
+**2. Quick Install (Recommended)**
+   
+   Run the auto-installer:
+   ```bash
+   chmod +x install.sh
+   ./install.sh
+   ```
+
+**3. Configure Environment Variables**
+   
+   Edit the configuration file:
+   ```bash
+   nano .env
+   ```
+   
+   Configure your settings:
+   ```env
+   DISCORD_TOKEN=your_discord_bot_token
+   DISCORD_ADMIN_CHANNEL_ID=your_forum_channel_id
+   CRCON_BASE_URL=http://your-crcon-server:8010
+   CRCON_USERNAME=your_crcon_username
+   CRCON_PASSWORD=your_crcon_password
+   ```
+
+> [!IMPORTANT]
+> - Save changes with `Ctrl`+`O` (then press `ENTER`)
+> - Exit nano with `Ctrl`+`X`
+
+**4. Start the Service**
+   ```bash
+   sudo systemctl start hll-admin-responder
+   ```
+
+## Discord Setup
+
+1. **Create Discord Bot**
+   - Go to [Discord Developer Portal](https://discord.com/developers/applications)
+   - Create new application and bot
+   - Copy bot token for `.env` file
+
+2. **Invite Bot to Server**
+   - Generate invite link with required permissions
+   - Add bot to your Discord server
+
+3. **Create Forum Channel**
+   - Create a forum channel in Discord
+   - Right-click → Copy Channel ID
+   - Add ID to `.env` file
+
+## Manual Installation
+
+If you prefer manual setup:
+
+```bash
+# Install dependencies
+sudo apt update && sudo apt install python3 python3-pip python3-venv -y
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install packages
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+nano .env
+
+# Run manually
+python run.py
+```
+
+## Usage
+
+**Players type in-game:**
+- `!admin` - Request admin help
+- `!admin I need help with teamkilling` - Request with message
+- `!admin stuck in geometry` - Specific issue
+
+**Admin Workflow:**
+1. Bot creates Discord forum post
+2. Admin replies in forum thread
+3. Message automatically sent to player in-game
+4. Click "Close Ticket" button when resolved
+
+## Service Management
+
+```bash
+# Start the bot
+sudo systemctl start hll-admin-responder
+
+# Stop the bot
+sudo systemctl stop hll-admin-responder
+
+# Restart the bot
+sudo systemctl restart hll-admin-responder
+
+# Check status
+sudo systemctl status hll-admin-responder
+
+# View live logs
+sudo journalctl -u hll-admin-responder -f
+
+# Enable auto-start (done by installer)
+sudo systemctl enable hll-admin-responder
+```
+
+## How It Works
+
+1. Player types `!admin` command in-game
+2. Bot detects command via CRCON logs
+3. Creates Discord forum post with NEW tag
+4. Mentions admin roles (if configured)
+5. Admin responds in Discord thread
+6. Bot sends admin message to player in-game
+7. Forum tag changes to REPLIED
+8. Admin closes ticket when resolved
+9. Player receives close confirmation
+
+## Troubleshooting
+
+**Bot not starting?**
+```bash
+sudo journalctl -u hll-admin-responder -f
+```
+
+**CRCON connection issues?**
+- Verify URL is accessible: `curl http://your-crcon-server:8010`
+- Check username/password in `.env`
+- Ensure CRCON API is enabled
+- Verify account permissions
+
+**Discord not working?**
+- Check bot token is correct
+- Verify forum channel ID
+- Ensure bot has required permissions
+- Check bot is in Discord server
+
+**Permission errors?**
+```bash
+# Fix file ownership
+sudo chown -R $USER:$USER /path/to/HLL_Admin_Responder/
+
+# Make script executable
+chmod +x install.sh
+```
+
+## Configuration Options
+
+### Optional Admin Role Mentions
+
+Add admin roles to be mentioned on new tickets:
+```env
+DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
+```
+
+### Logging Level
+
+Adjust logging verbosity:
+```env
+LOGGING_LEVEL=INFO
+```
 
 ## Project Structure
 
@@ -19,200 +215,32 @@ This project integrates a Hell Let Loose CRCON client with a Discord bot to prov
 HLL_Admin_Responder/
 ├── src/
 │   ├── main.py               # Application entry point
-│   ├── crcon/                # CRCON client module
-│   │   ├── __init__.py
-│   │   └── client.py         # CRCON API integration
-│   ├── discord_bot/          # Discord bot module
-│   │   ├── __init__.py
-│   │   └── bot.py            # Discord forum bot implementation
-│   └── utils/                # Utility functions
-│       ├── __init__.py
-│       └── config.py         # Configuration management
+│   ├── crcon/                # CRCON API client
+│   ├── discord_bot/          # Discord bot implementation
+│   └── utils/                # Configuration utilities
 ├── config/
-│   └── config.yaml           # Main configuration file
-├── run.py                    # Bot launcher script
+│   └── config.yaml           # Alternative config file
+├── install.sh                # Auto-installation script
+├── run.py                    # Bot launcher
 ├── requirements.txt          # Python dependencies
-├── .env.example             # Environment variables template
-└── README.md                # This documentation
+├── .env.example              # Environment template
+└── README.md                 # This file
 ```
 
-## Installation
+## Logging
 
-1. **Download the project:**
-   ```bash
-   # Extract to your desired location
-   cd HLL_Admin_Responder
-   ```
-
-2. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Create Discord Bot:**
-   - Go to [Discord Developer Portal](https://discord.com/developers/applications)
-   - Create a new application and bot
-   - Copy the bot token
-   - Invite the bot to your server with permissions:
-     - Send Messages
-     - Create Forum Posts
-     - Manage Threads
-     - Use External Emojis
-     - Add Reactions
-     - Mention Everyone (for admin role mentions)
-
-4. **Set up Discord Forum Channel:**
-   - Create a forum channel in your Discord server
-   - Copy the channel ID (right-click channel → Copy Channel ID)
-   - The bot will automatically create forum tags: NEW, REPLIED, CLOSED
-
-## Configuration
-
-### Using Environment Variables
+Logs are accessible via systemd:
 ```bash
-# Copy .env.example to .env and configure
-cp .env.example .env
+# View recent logs
+sudo journalctl -u hll-admin-responder --no-pager
+
+# Follow logs in real-time
+sudo journalctl -u hll-admin-responder -f
+
+# View logs from specific time
+sudo journalctl -u hll-admin-responder --since "2024-01-01 12:00:00"
 ```
-```env
-# .env
-DISCORD_TOKEN=your_discord_bot_token_here
-DISCORD_ADMIN_CHANNEL_ID=your_forum_channel_id_here
-CRCON_BASE_URL=http://your_crcon_server:8010
-CRCON_USERNAME=your_crcon_username
-CRCON_PASSWORD=your_crcon_password
-```
-
-## Configuration Details
-
-### Discord Settings
-- **token**: Your Discord bot token from the Developer Portal
-- **admin_channel_id**: Forum channel ID where admin posts will be created
-- **admin_roles**: Array of role IDs to mention on new requests (optional)
-
-### CRCON Settings
-- **base_url**: Your CRCON web interface URL (e.g., `http://localhost:8010`)
-- **username**: CRCON username with appropriate permissions
-- **password**: CRCON password
-
-## Usage
-
-### Starting the Bot
-```bash
-# Option 1: Using the launcher (recommended)
-python run.py
-
-```
-
-### In-Game Usage
-Players can request admin help using:
-- `!admin` - Basic admin request
-- `!admin I need help with teamkilling` - Request with message
-
-### Discord Admin Workflow
-1. **New Request**: Bot creates forum post with NEW tag and admin mentions
-2. **Admin Response**: Reply in the forum post to send message to player
-3. **Status Updates**: Tags automatically change: NEW → REPLIED → CLOSED
-4. **Close Ticket**: Use the "Close Ticket" button to end the conversation
-
-## How It Works
-
-### Request Flow
-1. **Detection**: Bot monitors CRCON logs for `!admin` commands
-2. **Forum Creation**: Creates timestamped forum post with player details
-3. **Admin Notification**: Mentions configured admin roles
-4. **Response Handling**: Discord replies are sent directly to player in-game
-5. **Player Response Handling**: Player can respond in chat without needing to use "!admin"
-6. **Status Tracking**: Forum tags reflect current ticket status
-7. **Closure**: Admins can close tickets with confirmation to player
-
-### Message Format
-- **To Player**: `[ADMIN AdminName]: Your message here`
-- **Close Confirmation**: `✅ Your admin ticket has been closed by AdminName. Thank you!`
-
-### Forum Post Format
-- **Title**: `YYYY-MM-DD HH:MM - PlayerName`
-- **Content**: Detailed embed with request information and timestamp
-- **Tags**: Automatic status tracking (NEW/REPLIED/CLOSED)
-
-## Features in Detail
-
-### Smart Duplicate Prevention
-- Tracks active requests per player
-- Prevents spam while allowing legitimate follow-ups
-- Memory-based tracking for optimal performance
-
-### Forum Tag Management
-- **NEW**: Fresh admin requests awaiting response
-- **REPLIED**: Admin has responded, awaiting resolution
-- **CLOSED**: Ticket completed and closed
-
-### Admin Controls
-- Close ticket button with confirmation
-- Automatic status updates
-- Player notification on closure
-
-## Troubleshooting
-
-### Common Issues
-
-**Bot not connecting to CRCON:**
-- Verify CRCON URL is accessible
-- Check username/password credentials
-- Ensure CRCON API is enabled
-
-**Bot not creating forum posts:**
-- Verify Discord bot permissions
-- Check forum channel ID is correct
-- Ensure bot is in the Discord server
-
-**Messages not reaching players:**
-- Check CRCON connection status
-- Verify player is still online
-- Check CRCON message permissions
-
-**Forum tags not working:**
-- Bot auto-creates missing tags
-- Check bot has Manage Threads permission
-- Restart bot if tags appear corrupted
-
-### Debug Information
-Monitor console output for:
-- ✅ Connection confirmations
-- 🎯 Admin request detections  
-- 📝 Forum post creations
-- 🔄 Message transmissions
-- ❌ Errors and warnings
-
-### Log Files
-The bot provides detailed console logging:
-- CRCON connection status
-- Discord bot events
-- Admin request processing
-- Error diagnostics
-
-## System Requirements
-
-- Python 3.8+
-- Active CRCON server
-- Discord bot with forum permissions
-- Stable internet connection
-
-## Support
-
-For issues and feature requests:
-1. Check the troubleshooting section
-2. Review console logs for errors
-3. Verify configuration settings
-4. Test with minimal setup
-
-## Contributing
-
-Contributions welcome! Areas for improvement:
-- Additional Discord integrations
-- Enhanced admin tools
-- Performance optimizations
-- Extended logging capabilities
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under

@@ -41,11 +41,14 @@ class CloseTicketView(discord.ui.View):
             
             # Send confirmation message to player
             try:
-                await self.discord_bot.crcon_client.send_message_to_player(
-                    self.player_name,
-                    f"✅ Your admin ticket has been closed by {interaction.user.display_name}. Thank you!"
-                )
-                print(f"✅ Sent close confirmation to player: {self.player_name}")
+                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
+                    await self.discord_bot.crcon_client.send_message_to_player(
+                        self.player_name,
+                        f"✅ Your admin ticket has been closed by {interaction.user.display_name}. Thank you!"
+                    )
+                    print(f"✅ Sent close confirmation to player: {self.player_name}")
+                else:
+                    print(f"⚠️ CRCON client not available to send close confirmation")
             except Exception as msg_error:
                 print(f"⚠️ Could not send close confirmation to player: {msg_error}")
                 
@@ -53,7 +56,10 @@ class CloseTicketView(discord.ui.View):
             
         except Exception as e:
             print(f"❌ Error closing ticket: {e}")
-            await interaction.response.send_message("❌ Error closing ticket", ephemeral=True)
+            try:
+                await interaction.response.send_message("❌ Error closing ticket", ephemeral=True)
+            except:
+                pass
 
 class DiscordBot:
     def __init__(self, config, crcon_client):
