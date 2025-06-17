@@ -274,8 +274,9 @@ class CRCONClient:
                                 print(f"❌ Failed to send admin request to Discord: {callback_error}")
                     
                     # Check if this is a response from a player with an active thread
+                    # FIXED: Check both CRCON tracking AND Discord bot tracking
                     elif (player_name and content and 
-                          player_name in self.active_threads and 
+                          (player_name in self.active_threads) and  # CRCON tracking
                           not content.lower().startswith('!admin')):
                         
                         print(f"💬 PLAYER RESPONSE (tracked): {player_name} - {content}")

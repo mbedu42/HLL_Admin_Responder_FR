@@ -127,6 +127,32 @@ class DiscordBot:
                 await self.handle_thread_message(message)
             
             await self.bot.process_commands(message)
+        
+        # Add cleanup command
+        @self.bot.command(name='cleanup_tickets')
+        @commands.has_permissions(administrator=True)
+        async def cleanup_tickets(ctx):
+            """Clean up tracking for deleted threads - Admin only"""
+            cleaned = 0
+            to_remove = []
+            
+            for player_name, thread in self.active_threads.items():
+                try:
+                    await thread.fetch()
+                except (discord.NotFound, discord.Forbidden):
+                    to_remove.append(player_name)
+                    cleaned += 1
+            
+            # Remove all the invalid entries
+            for player_name in to_remove:
+                if player_name in self.player_tickets:
+                    del self.player_tickets[player_name]
+                if player_name in self.active_threads:
+                    del self.active_threads[player_name]
+                if player_name in self.active_button_messages:
+                    del self.active_button_messages[player_name]
+            
+            await ctx.send(f"🧹 Cleaned up {cleaned} deleted ticket(s)")
     
     async def setup_forum_tags(self):
         """Setup or get existing forum tags"""
@@ -233,7 +259,7 @@ class DiscordBot:
                 try:
                     await self.crcon_client.send_message_to_player(
                         player_name,
-                        "⚠️ You already have an active admin ticket. You can reply to your request by typing in chat without using !admin again. Your message HAS been sent to admins."
+                        "⚠️ You already have an active admin ticket. You can reply to your request by typing in chat without using !admin again."
                     )
                 except Exception as msg_error:
                     print(f"❌ Could not send duplicate ticket message to player: {msg_error}")
@@ -283,6 +309,12 @@ class DiscordBot:
             # Store thread reference
             self.active_threads[player_name] = thread
             
+            # Register with CRCON client
+            self.crcon_client.register_admin_thread(player_name, {
+                'thread_id': thread.id,
+                'player_name': player_name
+            })
+            
             # Create detailed embed with player info and request
             embed = discord.Embed(
                 title="🚨 Admin Request",
@@ -316,9 +348,7 @@ class DiscordBot:
         except Exception as e:
             print(f"❌ Error handling admin request: {e}")
             logger.error(f"Error handling admin request: {e}")
-            import traceback
-            traceback.print_exc()
-    
+
     async def handle_player_response(self, player_name: str, message: str, event_time: str):
         """Handle player response in game"""
         try:
@@ -329,6 +359,30 @@ class DiscordBot:
                 return
             
             thread = self.active_threads[player_name]
+            
+            # Check if thread still exists by trying to send a message
+            # (Forum posts/threads don't have .fetch() method)
+            try:
+                # Try to get the thread's parent (this will fail if thread is deleted)
+                parent = thread.parent
+                if not parent:
+                    raise discord.NotFound("Thread parent not found")
+                    
+            except (discord.NotFound, discord.Forbidden, AttributeError):
+                print(f"🗑️ Thread for {player_name} was deleted, cleaning up tracking...")
+                # Clean up all tracking for this player
+                if player_name in self.player_tickets:
+                    del self.player_tickets[player_name]
+                if player_name in self.active_threads:
+                    del self.active_threads[player_name]
+                if player_name in self.active_button_messages:
+                    del self.active_button_messages[player_name]
+                
+                # Clean up CRCON tracking
+                self.crcon_client.unregister_admin_thread(player_name)
+                
+                print(f"✅ Cleaned up tracking for {player_name}, they can create new tickets now")
+                return
             
             # Apply NEW tag (player has responded, needs admin attention)
             await self.apply_forum_tag(thread, "NEW")
@@ -369,51 +423,65 @@ class DiscordBot:
         except Exception as e:
             print(f"❌ Error handling player response: {e}")
             logger.error(f"Error handling player response: {e}")
-    
-    async def handle_thread_message(self, message):
-        """Handle admin replies in forum posts"""
+
+    async def handle_thread_message(self, message: discord.Message):
+        """Handle messages in admin threads"""
         try:
-            thread = message.channel
-            
-            if not isinstance(thread, discord.Thread):
+            # Skip if message is from bot
+            if message.author == self.bot.user:
                 return
             
-            # Extract player name from thread title (format: "YYYY-MM-DD - PlayerName")
-            player_name = None
-            if " - " in thread.name:
-                parts = thread.name.split(" - ")
-                if len(parts) >= 2:
-                    player_name = parts[1].strip()
+            # Skip if not in a thread
+            if not isinstance(message.channel, discord.Thread):
+                return
             
-            if player_name and not message.author.bot:
-                admin_name = message.author.display_name
-                formatted_message = f"[ADMIN {admin_name}]: {message.content}"
+            # Find which player this thread belongs to
+            player_name = None
+            for name, thread in self.active_threads.items():
+                if thread.id == message.channel.id:
+                    player_name = name
+                    break
+            
+            if not player_name:
+                print(f"⚠️ Could not find player for thread: {message.channel.name}")
+                return
+            
+            # Skip system messages and embeds
+            if message.type != discord.MessageType.default or message.embeds:
+                return
+            
+            # Send admin response to player
+            admin_message = f"[ADMIN {message.author.display_name}]: {message.content}"
+            
+            try:
+                await self.crcon_client.send_message_to_player(player_name, admin_message)
+                print(f"✅ Sent admin response to {player_name}: {message.content}")
                 
                 # Apply REPLIED tag
-                await self.apply_forum_tag(thread, "REPLIED")
+                await self.apply_forum_tag(message.channel, 'REPLIED')
                 
-                success = await self.crcon_client.send_message_to_player(player_name, formatted_message)
+                # Add reaction to confirm message was sent
+                await message.add_reaction("✅")
                 
-                if success:
-                    await message.add_reaction("✅")
-                    print(f"✅ Admin message sent to {player_name}")
-                else:
-                    await message.add_reaction("❌")
-                    print(f"❌ Failed to send admin message to {player_name}")
+            except Exception as e:
+                print(f"❌ Failed to send message to player {player_name}: {e}")
+                await message.add_reaction("❌")
                 
-                logger.info(f"Sent message from {admin_name} to {player_name}: {message.content}")
-        
         except Exception as e:
+            print(f"❌ Error handling thread message: {e}")
             logger.error(f"Error handling thread message: {e}")
-    
+
     async def start(self):
         """Start the Discord bot"""
-        token = self.config.get('discord.token')
-        if not token:
-            logger.error("Discord token not found in configuration")
-            return
-        
         try:
+            token = self.config.get('discord.token')
+            if not token:
+                raise ValueError("Discord token not found in config")
+            
+            print(f"🚀 Starting Discord bot...")
             await self.bot.start(token)
+            
         except Exception as e:
+            print(f"❌ Failed to start Discord bot: {e}")
             logger.error(f"Failed to start Discord bot: {e}")
+            raise
