@@ -1,0 +1,17 @@
+rcon:
+  host: ${RCON_HOST}
+  port: ${RCON_PORT}
+  password: ${RCON_PASSWORD}
+
+discord:
+  token: ${DISCORD_TOKEN}
+  guild_id: ${DISCORD_GUILD_ID}
+  admin_channel_id: ${DISCORD_ADMIN_CHANNEL_ID}
+  admin_roles: ${DISCORD_ADMIN_ROLES}
+
+crcon:
+  base_url: ${CRCON_BASE_URL}
+  api_token: ${CRCON_API_TOKEN}
+
+logging:
+  level: "INFO"
