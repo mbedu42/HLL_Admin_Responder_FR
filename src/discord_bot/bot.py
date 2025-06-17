@@ -20,71 +20,40 @@ class CloseTicketView(discord.ui.View):
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            await interaction.response.defer()
+            # Apply CLOSED tag to thread
+            await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
             
-            thread = interaction.channel
-            player_name = self.player_name
+            # Disable the button
+            self.clear_items()
+            await interaction.response.edit_message(view=self)
             
-            # Extract player name from thread title if needed
-            if not player_name and isinstance(thread, discord.Thread):
-                thread_title = thread.name
-                # Remove the date/time part and extract player name
-                if " - " in thread_title:
-                    parts = thread_title.split(" - ")
-                    if len(parts) >= 2:
-                        player_name = parts[1].strip()
+            # Remove player from active tickets tracking
+            if self.player_name in self.discord_bot.player_tickets:
+                del self.discord_bot.player_tickets[self.player_name]
             
-            if not player_name:
-                await interaction.followup.send("❌ Could not determine player name", ephemeral=True)
-                return
-            
-            print(f"🔒 Closing ticket for {player_name}")
+            # Remove from active threads
+            if self.player_name in self.discord_bot.active_threads:
+                del self.discord_bot.active_threads[self.player_name]
+                
+            # Remove from active button messages
+            if self.player_name in self.discord_bot.active_button_messages:
+                del self.discord_bot.active_button_messages[self.player_name]
             
             # Send confirmation message to player
             try:
                 await self.discord_bot.crcon_client.send_message_to_player(
-                    player_name,
+                    self.player_name,
                     f"✅ Your admin ticket has been closed by {interaction.user.display_name}. Thank you!"
                 )
-                print(f"✅ Sent close confirmation to player: {player_name}")
+                print(f"✅ Sent close confirmation to player: {self.player_name}")
             except Exception as msg_error:
                 print(f"⚠️ Could not send close confirmation to player: {msg_error}")
-            
-            # Apply CLOSED tag to forum post
-            await self.discord_bot.apply_forum_tag(thread, "CLOSED")
-            
-            # Remove player from tracking
-            if player_name in self.discord_bot.active_threads:
-                del self.discord_bot.active_threads[player_name]
-                print(f"🗑️ Discord: Removed {player_name} from active_threads")
-            
-            if player_name in self.discord_bot.active_button_messages:
-                del self.discord_bot.active_button_messages[player_name]
-                print(f"🗑️ Discord: Removed {player_name} from button tracking")
-            
-            self.discord_bot.crcon_client.unregister_admin_thread(player_name)
-            
-            # Create closed embed
-            closed_embed = discord.Embed(
-                title="🔒 Ticket Closed",
-                description=f"Admin ticket for **{player_name}** has been closed by {interaction.user.mention}",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow()
-            )
-            
-            await interaction.edit_original_response(embed=closed_embed, view=None)
-            
-            # Archive and lock the thread
-            if isinstance(thread, discord.Thread):
-                await thread.edit(archived=True, locked=True)
-                print(f"🗃️ Thread archived and locked for {player_name}")
-            
-            print(f"✅ Ticket fully closed for {player_name}")
-            logger.info(f"Ticket closed for {player_name} by {interaction.user}")
+                
+            print(f"🔒 Ticket closed for {self.player_name} by {interaction.user.display_name}")
             
         except Exception as e:
-            logger.error(f"Error closing ticket: {e}")
-            await interaction.followup.send("❌ Error closing ticket", ephemeral=True)
+            print(f"❌ Error closing ticket: {e}")
+            await interaction.response.send_message("❌ Error closing ticket", ephemeral=True)
 
 class DiscordBot:
     def __init__(self, config, crcon_client):
@@ -92,6 +61,7 @@ class DiscordBot:
         self.crcon_client = crcon_client
         self.active_threads: Dict[str, discord.Thread] = {}
         self.active_button_messages: Dict[str, discord.Message] = {}
+        self.player_tickets: Dict[str, bool] = {}  # Track players with active tickets
         
         # Forum tags (will be populated on startup)
         self.forum_tags = {
@@ -228,24 +198,59 @@ class DiscordBot:
         try:
             print(f"🎯 Discord handler called: {player_name} - {admin_message}")
             
+            # Check if player already has an active ticket
+            if player_name in self.player_tickets and self.player_tickets[player_name]:
+                print(f"⚠️ Player {player_name} already has an active ticket")
+                
+                # Add their message to the existing ticket if they provided one
+                if admin_message and admin_message.strip() and player_name in self.active_threads:
+                    try:
+                        thread = self.active_threads[player_name]
+                        
+                        # Create embed for the additional message
+                        now = datetime.now()
+                        embed = discord.Embed(
+                            title="💬 Additional Message from Player",
+                            description=admin_message,
+                            color=discord.Color.blue(),
+                            timestamp=now
+                        )
+                        embed.set_footer(text=f"From: {player_name}")
+                        
+                        await thread.send(embed=embed)
+                        print(f"✅ Added player message to existing ticket: {player_name}")
+                        
+                    except Exception as thread_error:
+                        print(f"❌ Could not add message to existing thread: {thread_error}")
+                
+                # Send active ticket message
+                try:
+                    await self.crcon_client.send_message_to_player(
+                        player_name,
+                        "⚠️ You already have an active admin ticket. You can reply to your request by typing in chat without using !admin again."
+                    )
+                except Exception as msg_error:
+                    print(f"❌ Could not send duplicate ticket message to player: {msg_error}")
+                return
+            
             channel_id = self.config.get('discord.admin_channel_id')
             if not channel_id:
-                print(f"❌ No admin channel ID configured!")
+                print("❌ No admin channel ID configured")
                 return
                 
             channel = self.bot.get_channel(int(channel_id))
             
             if not channel:
-                print(f"❌ Could not find admin channel with ID: {channel_id}")
+                print(f"❌ Could not find channel with ID: {channel_id}")
                 return
             
             if not isinstance(channel, discord.ForumChannel):
-                print(f"❌ Channel is not a forum channel!")
+                print(f"❌ Channel {channel_id} is not a forum channel")
                 return
             
             # Create forum post with date and time
             now = datetime.now()
-            date_str = now.strftime("%d-%m-%Y")
+            date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M")
             post_name = f"{date_str} {time_str} - {player_name}"
             
@@ -265,54 +270,42 @@ class DiscordBot:
                 content=initial_content,
                 applied_tags=initial_tags
             )
+
+            # Mark player as having an active ticket
+            self.player_tickets[player_name] = True
             
-            print(f"✅ Forum post created: {thread.name}")
-            
-            # Send the detailed embed with Discord timestamp
-            embed = discord.Embed(
-                title="🚨 Admin Request Details",
-                description=f"**Player:** {player_name}\n**Message:** {admin_message}",
-                color=discord.Color.red(),
-                timestamp=discord.utils.utcnow()
-            )
-            embed.add_field(
-                name="📅 Request Time", 
-                value=f"<t:{int(datetime.now().timestamp())}:F>", 
-                inline=False
-            )
-            embed.set_footer(text="Reply in this thread to send messages directly to the player")
-            
-            await thread.send(embed=embed)
-            
-            # Add close button
-            view = CloseTicketView(player_name, self)
-            button_embed = discord.Embed(
-                title="🎛️ Admin Controls",
-                color=discord.Color.orange()
-            )
-            button_message = await thread.send(embed=button_embed, view=view)
-            
-            # Store the thread and button message
+            # Store thread reference
             self.active_threads[player_name] = thread
+            
+            # Create detailed embed with player info and request
+            embed = discord.Embed(
+                title="🚨 Admin Request",
+                color=discord.Color.red(),
+                timestamp=now
+            )
+            
+            embed.add_field(name="👤 Player", value=player_name, inline=True)
+            embed.add_field(name="🕐 Time", value=f"{date_str} {time_str}", inline=True)
+            embed.add_field(name="💬 Message", value=admin_message or "No additional message", inline=False)
+            
+            # Create close ticket button
+            view = CloseTicketView(player_name, self)
+            
+            # Send embed with button
+            button_message = await thread.send(embed=embed, view=view)
             self.active_button_messages[player_name] = button_message
             
-            self.crcon_client.register_admin_thread(player_name, {
-                'thread_id': thread.id,
-                'player_name': player_name
-            })
+            print(f"✅ Created admin request thread for {player_name}")
             
             # Send confirmation to player
             try:
                 await self.crcon_client.send_message_to_player(
-                    player_name, 
-                    "✅ Admin request received! Admins have been notified on Discord."
+                    player_name,
+                    "✅ Your admin request has been received! You can reply to this ticket by typing in chat (no need to use !admin again)."
                 )
-                print(f"✅ Confirmation sent to player")
+                print(f"✅ Sent confirmation to player: {player_name}")
             except Exception as msg_error:
-                print(f"⚠️ Could not send confirmation to player: {msg_error}")
-            
-            print(f"🎉 Successfully created admin forum post for {player_name}")
-            logger.info(f"Created admin forum post for {player_name}")
+                print(f"❌ Could not send confirmation to player: {msg_error}")
             
         except Exception as e:
             print(f"❌ Error handling admin request: {e}")
