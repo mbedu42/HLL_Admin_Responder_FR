@@ -8,7 +8,7 @@ Discord bot that automatically creates forum posts when players request admin he
 - **Discord Forum Posts**: Auto-creates tickets with tagging (NEW/REPLIED/CLOSED)
 - **Two-way Chat**: Reply in Discord → message sent to player in-game
 - **Smart Prevention**: One ticket per player, prevents spam
-- **Auto-Start**: Runs on boot, restarts if crashed
+- **Tmux Session**: Run in background with easy log access
 
 ## Requirements
 
@@ -46,17 +46,22 @@ Your CRCON account must have at least these permissions:
    cd HLL_Admin_Responder
    ```
 
-**2. Quick Install (Recommended)**
+**2. Run the Auto-Installer**
    
-   Run the auto-installer:
    ```bash
    chmod +x install.sh
    ./install.sh
    ```
+   
+   The installer will:
+   - Install dependencies (Python, tmux, etc.)
+   - Set up virtual environment
+   - Prompt you to configure `.env`
+   - Start the bot immediately in a tmux session
 
 **3. Configure Environment Variables**
    
-   Edit the configuration file:
+   If you didn't configure during install:
    ```bash
    nano .env
    ```
@@ -74,11 +79,6 @@ Your CRCON account must have at least these permissions:
 > - Save changes with `Ctrl`+`O` (then press `ENTER`)
 > - Exit nano with `Ctrl`+`X`
 
-**4. Start the Service**
-   ```bash
-   sudo systemctl start hll-admin-responder
-   ```
-
 ## Discord Setup
 
 1. **Create Discord Bot**
@@ -95,27 +95,26 @@ Your CRCON account must have at least these permissions:
    - Right-click → Copy Channel ID
    - Add ID to `.env` file
 
-## Manual Installation
+## Bot Management with Tmux
 
-If you prefer manual setup:
+The bot runs in a tmux session for easy management:
 
 ```bash
-# Install dependencies
-sudo apt update && sudo apt install python3 python3-pip python3-venv -y
+# View bot logs (attach to session)
+tmux attach -t hll-admin
 
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+# Detach from session (keep bot running)
+# Press: Ctrl+B then D
 
-# Install packages
-pip install -r requirements.txt
+# Check if bot is running
+tmux list-sessions
 
-# Configure environment
-cp .env.example .env
-nano .env
+# Restart the bot
+tmux kill-session -t hll-admin
+tmux new-session -d -s hll-admin -c "$(pwd)" "source venv/bin/activate && python run.py"
 
-# Run manually
-python run.py
+# Stop the bot completely
+tmux kill-session -t hll-admin
 ```
 
 ## Usage
@@ -131,26 +130,50 @@ python run.py
 3. Message automatically sent to player in-game
 4. Click "Close Ticket" button when resolved
 
-## Service Management
+## Manual Installation
+
+If you prefer manual setup:
 
 ```bash
-# Start the bot
-sudo systemctl start hll-admin-responder
+# Install dependencies
+sudo apt update && sudo apt install python3 python3-pip python3-venv tmux -y
 
-# Stop the bot
-sudo systemctl stop hll-admin-responder
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
 
-# Restart the bot
-sudo systemctl restart hll-admin-responder
+# Install packages
+pip install -r requirements.txt
 
-# Check status
-sudo systemctl status hll-admin-responder
+# Configure environment
+cp .env.example .env
+nano .env
 
-# View live logs
-sudo journalctl -u hll-admin-responder -f
+# Start in tmux session
+tmux new-session -d -s hll-admin "source venv/bin/activate && python run.py"
+```
 
-# Enable auto-start (done by installer)
-sudo systemctl enable hll-admin-responder
+## Tmux Quick Reference
+
+```bash
+# Attach to bot session
+tmux attach -t hll-admin
+
+# Detach from session (keep running)
+Ctrl+B then D
+
+# Scroll up in tmux (view logs)
+Ctrl+B then [
+# Use arrow keys to scroll, press Q to exit scroll mode
+
+# Kill session (stop bot)
+tmux kill-session -t hll-admin
+
+# List all sessions
+tmux list-sessions
+
+# Create new session
+tmux new-session -s session-name
 ```
 
 ## How It Works
@@ -167,31 +190,36 @@ sudo systemctl enable hll-admin-responder
 
 ## Troubleshooting
 
-**Bot not starting?**
+**Check if bot is running:**
 ```bash
-sudo journalctl -u hll-admin-responder -f
+tmux list-sessions
 ```
 
-**CRCON connection issues?**
+**View bot logs:**
+```bash
+tmux attach -t hll-admin
+```
+
+**Bot crashed or not responding:**
+```bash
+# Restart the bot
+tmux kill-session -t hll-admin
+cd HLL_Admin_Responder
+source venv/bin/activate
+tmux new-session -d -s hll-admin "python run.py"
+```
+
+**CRCON connection issues:**
 - Verify URL is accessible: `curl http://your-crcon-server:8010`
 - Check username/password in `.env`
 - Ensure CRCON API is enabled
 - Verify account permissions
 
-**Discord not working?**
+**Discord not working:**
 - Check bot token is correct
 - Verify forum channel ID
 - Ensure bot has required permissions
 - Check bot is in Discord server
-
-**Permission errors?**
-```bash
-# Fix file ownership
-sudo chown -R $USER:$USER /path/to/HLL_Admin_Responder/
-
-# Make script executable
-chmod +x install.sh
-```
 
 ## Configuration Options
 
@@ -202,45 +230,15 @@ Add admin roles to be mentioned on new tickets:
 DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
 ```
 
-### Logging Level
+## Quick Start Summary
 
-Adjust logging verbosity:
-```env
-LOGGING_LEVEL=INFO
-```
-
-## Project Structure
-
-```
-HLL_Admin_Responder/
-├── src/
-│   ├── main.py               # Application entry point
-│   ├── crcon/                # CRCON API client
-│   ├── discord_bot/          # Discord bot implementation
-│   └── utils/                # Configuration utilities
-├── config/
-│   └── config.yaml           # Alternative config file
-├── install.sh                # Auto-installation script
-├── run.py                    # Bot launcher
-├── requirements.txt          # Python dependencies
-├── .env.example              # Environment template
-└── README.md                 # This file
-```
-
-## Logging
-
-Logs are accessible via systemd:
-```bash
-# View recent logs
-sudo journalctl -u hll-admin-responder --no-pager
-
-# Follow logs in real-time
-sudo journalctl -u hll-admin-responder -f
-
-# View logs from specific time
-sudo journalctl -u hll-admin-responder --since "2024-01-01 12:00:00"
-```
+1. Upload project files to VPS
+2. Run `chmod +x install.sh && ./install.sh`
+3. Configure `.env` when prompted
+4. Bot starts automatically in tmux
+5. Use `tmux attach -t hll-admin` to view logs
+6. Press `Ctrl+B then D` to detach and keep bot running
 
 ## License
 
-This project is licensed under
+This project is licensed under the MIT License.

@@ -1,16 +1,24 @@
+#!/bin/bash
+
 # HLL Admin Responder Installation Script for Linux VPS
 
 set -e
 
 echo "🚀 Starting HLL Admin Responder installation..."
 
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then
+    echo "⚠️  Please do not run this script as root"
+    exit 1
+fi
+
 # Update system packages
 echo "📦 Updating system packages..."
 sudo apt update && sudo apt upgrade -y
 
-# Install required packages
-echo "📦 Installing Python and dependencies..."
-sudo apt install python3 python3-pip python3-venv git -y
+# Install required packages (including tmux)
+echo "📦 Installing Python, tmux and dependencies..."
+sudo apt install python3 python3-pip python3-venv git tmux -y
 
 # Create virtual environment
 echo "🐍 Creating Python virtual environment..."
@@ -26,39 +34,31 @@ if [ ! -f .env ]; then
     echo "⚙️  Creating environment configuration..."
     cp .env.example .env
     echo "⚠️  Please edit .env file with your configuration before starting the bot"
+    echo ""
+    echo "Edit the configuration now? (y/n)"
+    read -p "Choice: " choice
+    if [[ $choice == "y" || $choice == "Y" ]]; then
+        nano .env
+    fi
 fi
-
-# Create systemd service file
-echo "🔧 Setting up systemd service..."
-sudo tee /etc/systemd/system/hll-admin-responder.service > /dev/null << EOF
-[Unit]
-Description=HLL Admin Responder Bot
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$PWD
-Environment=PATH=$PWD/venv/bin
-ExecStart=$PWD/venv/bin/python run.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Reload systemd and enable service
-echo "🔄 Enabling auto-start service..."
-sudo systemctl daemon-reload
-sudo systemctl enable hll-admin-responder
 
 echo "✅ Installation complete!"
 echo ""
-echo "Next steps:"
-echo "1. Edit .env file with your configuration: nano .env"
-echo "2. Start the bot: sudo systemctl start hll-admin-responder"
-echo "3. Check status: sudo systemctl status hll-admin-responder"
-echo "4. View logs: sudo journalctl -u hll-admin-responder -f"
+echo "🚀 Starting bot in tmux session..."
+
+# Kill existing session if it exists
+tmux kill-session -t hll-admin 2>/dev/null || true
+
+# Start new tmux session with the bot
+tmux new-session -d -s hll-admin -c "$PWD" "source venv/bin/activate && python run.py"
+
+echo "✅ Bot started in tmux session 'hll-admin'"
 echo ""
-echo "The bot will automatically start on system reboot."
+echo "Commands to manage the bot:"
+echo "  📺 View bot logs: tmux attach -t hll-admin"
+echo "  🔌 Detach from session: Ctrl+B then D"
+echo "  🔄 Restart bot: tmux kill-session -t hll-admin && tmux new-session -d -s hll-admin -c '$PWD' 'source venv/bin/activate && python run.py'"
+echo "  🛑 Stop bot: tmux kill-session -t hll-admin"
+echo "  📋 List sessions: tmux list-sessions"
+echo ""
+echo "🎯 The bot is now running! Use 'tmux attach -t hll-admin' to view logs."
