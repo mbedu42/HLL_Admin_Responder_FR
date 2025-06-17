@@ -6,12 +6,6 @@ set -e
 
 echo "🚀 Starting HLL Admin Responder installation..."
 
-# Check if running as root
-if [ "$EUID" -eq 0 ]; then
-    echo "⚠️  Please do not run this script as root"
-    exit 1
-fi
-
 # Update system packages
 echo "📦 Updating system packages..."
 sudo apt update && sudo apt upgrade -y
