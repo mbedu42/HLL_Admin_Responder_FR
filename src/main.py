@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import signal
+import sys
 from dotenv import load_dotenv
 import os
 
@@ -48,19 +50,37 @@ async def main():
     
     print(f"🚀 Starting HLL RCON Discord Bot...")
     
-    # Start both services
+    # Start both services concurrently
     try:
         await asyncio.gather(
             crcon_client.start_monitoring(),
             discord_bot.start()
         )
+        
     except KeyboardInterrupt:
-        print(f"\n🛑 Shutting down...")
+        print("\n🛑 Shutdown requested by user")
+    except asyncio.CancelledError:
+        print("\n🛑 Tasks cancelled during shutdown")
     except Exception as e:
-        print(f"❌ Error: {e}")
-        logging.error(f"Application error: {e}")
+        print(f"\n❌ Unexpected error: {e}")
     finally:
-        await crcon_client.close_session()
+        print("🔄 Cleaning up...")
+        # Add any cleanup code here if needed
+        print("✅ Shutdown complete")
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    print(f"\n🛑 Received signal {signum}, shutting down...")
+    sys.exit(0)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n✅ Bot stopped successfully")
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
