@@ -2,6 +2,8 @@
 
 Discord bot that automatically creates forum posts when players request admin help in-game. Admins can respond directly from Discord and messages are sent back to players.
 
+## This currently only supports Single Servers. I will work on Multiple Server unless someone beats me to it.
+
 ## Features
 
 - **Real-time Monitoring**: Watches HLL server for `!admin` commands
