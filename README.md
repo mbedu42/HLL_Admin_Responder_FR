@@ -42,7 +42,7 @@ Your CRCON account must have at least these permissions:
    
    Upload the project files to your Linux VPS or clone:
    ```bash
-   git clone https://github.com/your-repo/HLL_Admin_Responder.git
+   git clone https://github.com/SpinexLive/HLL_Admin_Responder
    cd HLL_Admin_Responder
    ```
 
