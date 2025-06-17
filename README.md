@@ -10,22 +10,33 @@ Discord bot that automatically creates forum posts when players request admin he
 - **Smart Prevention**: One ticket per player, prevents spam
 - **Tmux Session**: Run in background with easy log access
 
-## Requirements
+## How It Works
 
-- Linux VPS (Ubuntu 20.04+)
-- Python 3.8+
-- 512MB RAM minimum
-- CRCON server access
-- Discord bot
+1. Player types `!admin` command in-game
+2. Bot detects command via CRCON logs
+3. Creates Discord forum post with NEW tag
+4. Mentions admin roles (if configured)
+5. Admin responds in Discord thread
+6. Bot sends admin message to player in-game
+7. Forum tag changes to REPLIED
+8. Player replies via in game chat, no need to use !admin again
+9. Admin closes ticket when resolved
+10. Player receives close confirmation
 
-## Mandatory CRCON Permissions
+## Pre-Installation Setup
 
-Your CRCON account must have at least these permissions:
-- **api|rcon user|Can message players**
-- **api|logs|Can view logs**
+### 1. Discord Bot Setup
 
-## Mandatory Discord Bot Permissions
+**Create Discord Bot:**
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click "New Application" and give it a name
+3. Go to "Bot" section and click "Add Bot"
+4. Copy the bot token (you'll need this later)
+5. Under "Privileged Gateway Intents" enable:
+   - **Message Content Intent**
 
+**Bot Permissions:**
+Generate an invite link with these permissions:
 - Send Messages
 - Create Forum Posts
 - Manage Threads
@@ -33,67 +44,84 @@ Your CRCON account must have at least these permissions:
 - Add Reactions
 - Mention Everyone (for admin role mentions)
 
-**Under Bot (Privileged Gateway Intents)**
-- Message Content Intent
+**Invite Bot to Server:**
+Use the generated invite link to add the bot to your Discord server.
+
+**Create Forum Channel:**
+1. Create a new forum channel in your Discord server
+2. Right-click the forum channel → "Copy Channel ID"
+3. Save this ID (you'll need it for configuration)
+
+### 2. CRCON Access Setup
+
+**Required CRCON Permissions:**
+Your CRCON account must have at least:
+- **api|rcon user|Can message players**
+- **api|logs|Can view logs**
+
+**Information Needed:**
+- CRCON server URL (e.g., `http://your-server-ip:8010`)
+- CRCON API
 
 ## Installation
 
-**1. Clone/Upload the Repository**
-   
-   Upload the project files to your Linux VPS or clone:
-   ```bash
-   git clone https://github.com/SpinexLive/HLL_Admin_Responder
-   cd HLL_Admin_Responder
-   ```
+### 1. Prepare Information
 
-**2. Run the Auto-Installer**
-   
-   ```bash
-   chmod +x install.sh
-   ./install.sh
-   ```
-   
-   The installer will:
-   - Install dependencies (Python, tmux, etc.)
-   - Set up virtual environment
-   - Prompt you to configure `.env`
-   - Start the bot immediately in a tmux session
+Before starting, have these ready:
+- ✅ Discord bot token
+- ✅ Discord forum channel ID
+- ✅ CRCON server URL
+- ✅ CRCON API
+- ✅ Admin role IDs (optional)
 
-**3. Configure Environment Variables**
-   
-   If you didn't configure during install:
-   ```bash
-   nano .env
-   ```
-   
-   Configure your settings:
-   ```env
-   DISCORD_TOKEN=your_discord_bot_token
-   DISCORD_ADMIN_CHANNEL_ID=your_forum_channel_id
-   CRCON_BASE_URL=http://your-crcon-server:8010
-   CRCON_USERNAME=your_crcon_username
-   CRCON_PASSWORD=your_crcon_password
-   ```
+### 2. Clone the Repository
+
+```bash
+git clone https://github.com/SpinexLive/HLL_Admin_Responder
+cd HLL_Admin_Responder
+```
+
+### 3. Run the Auto-Installer
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+The installer will:
+- Install dependencies (Python, tmux, etc.)
+- Set up virtual environment
+- Prompt you to configure `.env`
+- Start the bot immediately in a tmux session
+
+### 4. Configure Environment Variables
+
+When prompted (or manually edit):
+```bash
+nano .env
+```
+
+Enter your prepared information:
+```env
+# RCON Settings
+RCON_HOST=your_rcon_host
+RCON_PORT=your_rcon_port
+RCON_PASSWORD=your_rcon_password
+
+# Discord Settings
+DISCORD_TOKEN=your_discord_bot_token
+DISCORD_GUILD_ID=your_discord_guild_id
+DISCORD_ADMIN_CHANNEL_ID=your_discord_admin_channel_id
+DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
+
+# CRCON Settings
+CRCON_BASE_URL=http://your_crcon_host:port
+CRCON_API_TOKEN=your_crcon_api_token
+```
 
 > [!IMPORTANT]
 > - Save changes with `Ctrl`+`O` (then press `ENTER`)
 > - Exit nano with `Ctrl`+`X`
-
-## Discord Setup
-
-1. **Create Discord Bot**
-   - Go to [Discord Developer Portal](https://discord.com/developers/applications)
-   - Create new application and bot
-   - Copy bot token for `.env` file
-
-2. **Invite Bot to Server**
-   - Generate invite link with required permissions
-   - Add bot to your Discord server
-
-3. **Create Forum Channel**
-   - Create a forum channel in Discord
-   - Right-click → Copy Channel ID
-   - Add ID to `.env` file
 
 ## Bot Management with Tmux
 
@@ -176,18 +204,6 @@ tmux list-sessions
 tmux new-session -s session-name
 ```
 
-## How It Works
-
-1. Player types `!admin` command in-game
-2. Bot detects command via CRCON logs
-3. Creates Discord forum post with NEW tag
-4. Mentions admin roles (if configured)
-5. Admin responds in Discord thread
-6. Bot sends admin message to player in-game
-7. Forum tag changes to REPLIED
-8. Admin closes ticket when resolved
-9. Player receives close confirmation
-
 ## Troubleshooting
 
 **Check if bot is running:**
@@ -211,7 +227,7 @@ tmux new-session -d -s hll-admin "python run.py"
 
 **CRCON connection issues:**
 - Verify URL is accessible: `curl http://your-crcon-server:8010`
-- Check username/password in `.env`
+- Check API `.env`
 - Ensure CRCON API is enabled
 - Verify account permissions
 
@@ -221,23 +237,16 @@ tmux new-session -d -s hll-admin "python run.py"
 - Ensure bot has required permissions
 - Check bot is in Discord server
 
-## Configuration Options
+## Getting Discord IDs
 
-### Optional Admin Role Mentions
+**Forum Channel ID:**
+1. Right-click forum channel → "Copy Channel ID"
+2. If you don't see this option, enable Developer Mode in Discord settings
 
-Add admin roles to be mentioned on new tickets:
-```env
-DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
-```
+**Role IDs (for mentions):**
+1. Right-click role → "Copy Role ID"
+2. Add multiple roles separated by commas in `.env`
 
-## Quick Start Summary
-
-1. Upload project files to VPS
-2. Run `chmod +x install.sh && ./install.sh`
-3. Configure `.env` when prompted
-4. Bot starts automatically in tmux
-5. Use `tmux attach -t hll-admin` to view logs
-6. Press `Ctrl+B then D` to detach and keep bot running
 
 ## License
 
