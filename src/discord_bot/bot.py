@@ -233,7 +233,7 @@ class DiscordBot:
                 try:
                     await self.crcon_client.send_message_to_player(
                         player_name,
-                        "⚠️ You already have an active admin ticket. You can reply to your request by typing in chat without using !admin again."
+                        "⚠️ You already have an active admin ticket. You can reply to your request by typing in chat without using !admin again. Your message HAS been sent to admins."
                     )
                 except Exception as msg_error:
                     print(f"❌ Could not send duplicate ticket message to player: {msg_error}")
