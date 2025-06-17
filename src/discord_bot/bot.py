@@ -44,7 +44,7 @@ class CloseTicketView(discord.ui.View):
             try:
                 await self.discord_bot.crcon_client.send_message_to_player(
                     player_name,
-                    "✅ Your admin ticket has been closed. Thank you!"
+                    f"✅ Your admin ticket has been closed by {interaction.user.display_name}. Thank you!"
                 )
                 print(f"✅ Sent close confirmation to player: {player_name}")
             except Exception as msg_error:
@@ -245,8 +245,9 @@ class DiscordBot:
             
             # Create forum post with date and time
             now = datetime.now()
-            date_str = now.strftime("%Y-%m-%d")
-            post_name = f"{date_str} - {player_name}"
+            date_str = now.strftime("%d-%m-%Y")
+            time_str = now.strftime("%H:%M")
+            post_name = f"{date_str} {time_str} - {player_name}"
             
             # Create initial message content with admin mentions
             admin_mentions = self.get_admin_mentions()
