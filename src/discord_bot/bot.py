@@ -115,9 +115,6 @@ class DiscordBot:
             print(f"🤖 {self.bot.user} has connected to Discord!")
             logger.info(f'{self.bot.user} has connected to Discord!')
             
-            # Add persistent view
-            self.bot.add_view(CloseTicketView("", self))
-            
             # Setup forum tags
             await self.setup_forum_tags()
             
