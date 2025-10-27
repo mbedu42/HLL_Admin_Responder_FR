@@ -23,9 +23,16 @@ class CloseTicketView(discord.ui.View):
             # Apply CLOSED tag to thread
             await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
             
-            # Disable the button
+            # Update the controls embed to show closed state in green and remove controls
+            closed_embed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                description=f"Le ticket de **{self.player_name}** est clôturé",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
+            # Disable the button and update embed on the message with the component
             self.clear_items()
-            await interaction.response.edit_message(view=self)
+            await interaction.response.edit_message(embed=closed_embed, view=None)
             
             # Remove player from active tickets tracking (Discord bot)
             if self.player_name in self.discord_bot.player_tickets:

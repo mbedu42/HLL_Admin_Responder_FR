@@ -389,15 +389,24 @@ class CloseTicketView(discord.ui.View):
             
             self.discord_bot.crcon_client.unregister_admin_thread(player_name)
             
-            # Create closed embed
+            # Create confirmation embed as the interaction response (optional informational post)
             closed_embed = discord.Embed(
                 title="🔒 Ticket fermé",
-                description=f"Le ticket de **{player_name}** à été cloturé par {interaction.user.mention}",
+                description=f"Le ticket de **{player_name}** a été clôturé par {interaction.user.mention}",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
             )
-            
-            await interaction.edit_original_response(embed=closed_embed, view=None)
+            # Removed extra closed post; controls panel is updated instead
+
+            # Update the existing controls panel (the button message) to closed state in green
+            controls_closed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                description=f"Le ticket de **{player_name}** est clôturé",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
+            # We deferred earlier; edit the message the button was attached to
+            await interaction.message.edit(embed=controls_closed, view=None)
             
             # Archive and lock the thread
             if isinstance(thread, discord.Thread):
