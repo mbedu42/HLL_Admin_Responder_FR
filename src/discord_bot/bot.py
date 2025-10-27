@@ -54,7 +54,7 @@ class CloseTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        f"✅ Votre ticket admin a été fermé par {interaction.user.display_name}. Merci !"
+                        f"✅ Votre ticket admin a été fermé par un modérateur. Merci !"
                     )
                     print(f"✅ Sent close confirmation to player: {self.player_name}")
                 else:
@@ -458,7 +458,7 @@ class DiscordBot:
                 return
             
             # Send admin response to player
-            admin_message = f"[ADMIN {message.author.display_name}]: {message.content}"
+            admin_message = f"[ADMIN]: {message.content}"
             
             try:
                 await self.crcon_client.send_message_to_player(player_name, admin_message)
