@@ -23,11 +23,11 @@ class AdminRequestHandler:
             timestamp=discord.utils.utcnow()
         )
         
-        embed.add_field(name="Player", value=player_name, inline=True)
-        embed.add_field(name="Server", value="Hell Let Loose", inline=True)
-        embed.add_field(name="Message", value=message or "No message provided", inline=False)
+        embed.add_field(name="Joueur", value=player_name, inline=True)
+        embed.add_field(name="Serveur", value="Hell Let Loose", inline=True)
+        embed.add_field(name="Message", value=message or "Aucun message fourni", inline=False)
         
-        embed.set_footer(text="Reply in this thread to communicate with the player")
+        embed.set_footer(text="Répondez dans ce fil pour communiquer avec le joueur")
         
         return embed
     
@@ -66,8 +66,8 @@ class DiscordHandlers:
 
     async def on_admin_command(self, message: Message):
         if message.content.startswith('!admin'):
-            thread = await message.channel.create_thread(name=f"Admin Thread - {message.author.name}", auto_archive_duration=60)
-            await thread.send(f"Admin command received from {message.author.name}. Please respond here.")
+            thread = await message.channel.create_thread(name=f"Fil Admin - {message.author.name}", auto_archive_duration=60)
+            await thread.send(f"Commande admin reçue de {message.author.name}. Merci de répondre ici.")
 
             def check(response: Message):
                 return response.channel == thread and response.author == message.author
@@ -76,9 +76,9 @@ class DiscordHandlers:
                 response = await self.bot.wait_for('message', check=check, timeout=300)
                 await self.handle_admin_response(response, message.author)
             except asyncio.TimeoutError:
-                await thread.send("No response received in time.")
+                await thread.send("Aucune réponse reçue à temps.")
 
     async def handle_admin_response(self, response: Message, player):
         command = response.content
         result = self.rcon_client.send_command(command)
-        await response.channel.send(f"Response to {player.name}: {result}")
+        await response.channel.send(f"Réponse à {player.name} : {result}")

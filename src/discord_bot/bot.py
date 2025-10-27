@@ -13,7 +13,7 @@ class CloseTicketView(discord.ui.View):
         self.discord_bot = discord_bot
     
     @discord.ui.button(
-        label="Close Ticket", 
+        label="Fermer le ticket", 
         style=discord.ButtonStyle.danger, 
         emoji="🔒",
         custom_id="close_ticket_button"
