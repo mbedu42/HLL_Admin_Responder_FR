@@ -1,4 +1,4 @@
-# src/discord_bot/__init__.py
+﻿# src/discord_bot/__init__.py
 
 from .bot import DiscordBot
 

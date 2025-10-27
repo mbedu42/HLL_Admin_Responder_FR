@@ -1,3 +1,3 @@
-from .client import CRCONClient
+﻿from .client import CRCONClient
 
 __all__ = ['CRCONClient']

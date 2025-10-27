@@ -1,4 +1,4 @@
-import discord
+﻿import discord
 import logging
 import asyncio
 from typing import Optional
@@ -26,7 +26,7 @@ class AdminRequestHandler:
         embed.add_field(name="Joueur", value=player_name, inline=True)
         embed.add_field(name="Serveur", value="Hell Let Loose", inline=True)
         embed.add_field(name="Message", value=message or "Aucun message fourni", inline=False)
-        
+
         embed.set_footer(text="Répondez dans ce fil pour communiquer avec le joueur")
         
         return embed
@@ -34,9 +34,9 @@ class AdminRequestHandler:
     async def send_player_notification(self, player_name: str, success: bool = True):
         """Send notification to player about their request"""
         if success:
-            message = "✅ Requête admin reçue ! Les admins ont été avertis sur Discord, et vont vous assister sous peu."
+            message = "Demande admin reçue ! Les admins ont été avertis sur Discord et vont vous assister sous peu."
         else:
-            message = "❌ Un problème est survenu lors du traitement de votre requête admin. Veuillez réessayer."
+            message = "Un problème est survenu lors du traitement de votre demande admin. Veuillez réessayer."
         
         await self.rcon_client.send_message_to_player(player_name, message)
     
@@ -82,3 +82,6 @@ class DiscordHandlers:
         command = response.content
         result = self.rcon_client.send_command(command)
         await response.channel.send(f"Réponse à {player.name} : {result}")
+
+
+

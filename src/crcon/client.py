@@ -1,4 +1,4 @@
-import aiohttp
+﻿import aiohttp
 import asyncio
 import logging
 from typing import Optional, Callable, Set, Dict
@@ -74,14 +74,14 @@ class CRCONClient:
                     if logs:
                         # Get the highest log ID to start tracking from
                         self.highest_log_id = max(log.get('id', 0) for log in logs)
-                        print(f"🚀 Initialized log tracking. Starting from log ID: {self.highest_log_id}")
+                        print(f" Initialized log tracking. Starting from log ID: {self.highest_log_id}")
                         
                         # Mark existing admin requests as processed
                         for log in logs:
                             if log.get('id'):
                                 self.processed_log_ids.add(log.get('id'))
                     else:
-                        print(f"⚠️ No logs found during initialization")
+                        print(f" No logs found during initialization")
                         
         except Exception as e:
             logger.error(f"Error initializing log tracking: {e}")
@@ -89,17 +89,17 @@ class CRCONClient:
     def register_admin_thread(self, player_name: str, thread_info: dict):
         """Register an active admin thread for a player"""
         self.active_threads[player_name] = thread_info
-        print(f"📝 CRCON: Registered admin thread for {player_name}")
-        print(f"🔍 CRCON: Currently tracking {len(self.active_threads)} players: {list(self.active_threads.keys())}")
+        print(f" CRCON: Registered admin thread for {player_name}")
+        print(f" CRCON: Currently tracking {len(self.active_threads)} players: {list(self.active_threads.keys())}")
     
     def unregister_admin_thread(self, player_name: str):
         """Remove an admin thread when it's closed"""
         if player_name in self.active_threads:
             del self.active_threads[player_name]
-            print(f"🗑️ CRCON: Unregistered admin thread for {player_name}")
-            print(f"🔍 CRCON: Now tracking {len(self.active_threads)} players: {list(self.active_threads.keys())}")
+            print(f" CRCON: Unregistered admin thread for {player_name}")
+            print(f" CRCON: Now tracking {len(self.active_threads)} players: {list(self.active_threads.keys())}")
         else:
-            print(f"⚠️ CRCON: Tried to unregister {player_name} but they weren't tracked")
+            print(f" CRCON: Tried to unregister {player_name} but they weren't tracked")
     
     async def send_message_to_player(self, player_name: str, message: str):
         """Send message to player via API"""
@@ -128,13 +128,13 @@ class CRCONClient:
                 "by": "Discord Admin"
             }
             
-            print(f"🔗 Sending POST to: {url}")
-            print(f"📤 Data: {data}")
+            print(f"Sending POST to: {url}")
+            print(f"Data: {data}")
             
             async with self.session.post(url, json=data) as response:
                 response_text = await response.text()
-                print(f"📥 Response status: {response.status}")
-                print(f"📥 Response: {response_text[:200]}...")
+                print(f"Response status: {response.status}")
+                print(f"Response: {response_text[:200]}...")
                 
                 if response.status == 200:
                     logger.info(f"Sent message to {player_name}: {message}")
@@ -191,9 +191,9 @@ class CRCONClient:
                     data = await response.json()
                     logs = data.get('result', [])
                     
-                    print(f"🔍 Checking {len(logs)} logs (tracking from ID {self.highest_log_id})")
+                    print(f" Checking {len(logs)} logs (tracking from ID {self.highest_log_id})")
                     if self.active_threads:
-                        print(f"👥 Currently tracking responses for: {list(self.active_threads.keys())}")
+                        print(f" Currently tracking responses for: {list(self.active_threads.keys())}")
                     
                     # Filter for NEW logs
                     new_logs = []
@@ -216,7 +216,7 @@ class CRCONClient:
                             log_id not in self.processed_log_ids):
                             
                             new_logs.append(log)
-                            print(f"🆕 NEW LOG: ID {log_id} - {player_name}: {content}")
+                            print(f" NEW LOG: ID {log_id} - {player_name}: {content}")
                     
                     # Update our highest log ID
                     if new_highest_id > self.highest_log_id:
@@ -252,7 +252,7 @@ class CRCONClient:
                     
                     # Check if this is an !admin request
                     if player_name and content and '!admin' in content.lower():
-                        print(f"🚨 ADMIN REQUEST: {player_name} - {content}")
+                        print(f" ADMIN REQUEST: {player_name} - {content}")
                         
                         # Extract admin message
                         admin_message = ""
@@ -269,9 +269,9 @@ class CRCONClient:
                         if self.message_callback:
                             try:
                                 await self.message_callback(player_name, admin_message)
-                                print(f"✅ Admin request sent to Discord!")
+                                print(f" Admin request sent to Discord!")
                             except Exception as callback_error:
-                                print(f"❌ Failed to send admin request to Discord: {callback_error}")
+                                print(f" Failed to send admin request to Discord: {callback_error}")
                     
                     # Check if this is a response from a player with an active thread
                     # FIXED: Check both CRCON tracking AND Discord bot tracking
@@ -279,18 +279,18 @@ class CRCONClient:
                           (player_name in self.active_threads) and  # CRCON tracking
                           not content.lower().startswith('!admin')):
                         
-                        print(f"💬 PLAYER RESPONSE (tracked): {player_name} - {content}")
+                        print(f" PLAYER RESPONSE (tracked): {player_name} - {content}")
                         
                         if self.player_response_callback:
                             try:
                                 await self.player_response_callback(player_name, content, event_time)
-                                print(f"✅ Player response sent to Discord thread!")
+                                print(f" Player response sent to Discord thread!")
                             except Exception as callback_error:
-                                print(f"❌ Failed to send player response to Discord: {callback_error}")
+                                print(f" Failed to send player response to Discord: {callback_error}")
                     
                     # If player is not being tracked, just log it but don't send to Discord
                     elif player_name and content and not content.lower().startswith('!admin'):
-                        print(f"💬 Regular chat (not tracked): {player_name} - {content}")
+                        print(f" Regular chat (not tracked): {player_name} - {content}")
                                 
 
                 except Exception as e:
@@ -303,12 +303,12 @@ class CRCONClient:
     def set_message_callback(self, callback: Callable):
         """Set callback for admin requests"""
         self.message_callback = callback
-        print(f"✅ Admin request callback set!")
+        print(f" Admin request callback set!")
     
     def set_player_response_callback(self, callback: Callable):
         """Set callback for player responses"""
         self.player_response_callback = callback
-        print(f"✅ Player response callback set!")
+        print(f" Player response callback set!")
     
     async def start_monitoring(self):
         """Start monitoring for admin requests"""
@@ -319,7 +319,7 @@ class CRCONClient:
         await self.initialize_log_tracking()
         
         self.monitoring = True
-        print(f"🔍 Started monitoring for admin requests and player responses")
+        print(f" Started monitoring for admin requests and player responses")
         logger.info("Started monitoring for admin requests via CRCON API")
         
         while self.monitoring:
@@ -360,20 +360,20 @@ class CloseTicketView(discord.ui.View):
                 player_name = thread_title.replace("Admin Request - ", "").strip()
             
             if not player_name:
-                await interaction.followup.send("❌ Could not determine player name", ephemeral=True)
+                await interaction.followup.send("Could not determine player name", ephemeral=True)
                 return
             
-            print(f"🔒 Closing ticket for {player_name}")
+            print(f" Closing ticket for {player_name}")
             
             # Send confirmation message to player
             try:
                 await self.discord_bot.crcon_client.send_message_to_player(
                     player_name,
-                    "✅ Votre ticket admin a été fermé. Merci !"
+                    "Votre ticket admin a été fermé. Merci !"
                 )
-                print(f"✅ Sent close confirmation to player: {player_name}")
+                print(f"Sent close confirmation to player: {player_name}")
             except Exception as msg_error:
-                print(f"⚠️ Could not send close confirmation to player: {msg_error}")
+                print(f" Could not send close confirmation to player: {msg_error}")
             
             # Apply CLOSED tag to forum post
             await self.discord_bot.apply_forum_tag(thread, "CLOSED")
@@ -381,18 +381,18 @@ class CloseTicketView(discord.ui.View):
             # Remove player from tracking
             if player_name in self.discord_bot.active_threads:
                 del self.discord_bot.active_threads[player_name]
-                print(f"🗑️ Discord: Removed {player_name} from active_threads")
+                print(f"Discord: Removed {player_name} from active_threads")
             
             if player_name in self.discord_bot.active_button_messages:
                 del self.discord_bot.active_button_messages[player_name]
-                print(f"🗑️ Discord: Removed {player_name} from button tracking")
+                print(f" Discord: Removed {player_name} from button tracking")
             
             self.discord_bot.crcon_client.unregister_admin_thread(player_name)
             
             # Create closed embed
             closed_embed = discord.Embed(
-                title="🔒 Ticket Closed",
-                description=f"Admin ticket for **{player_name}** has been closed by {interaction.user.mention}",
+                title="Ticket Fermé",
+                description=f"Le ticket admin de **{player_name}** à été cloturé par {interaction.user.mention}",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
             )
@@ -402,14 +402,14 @@ class CloseTicketView(discord.ui.View):
             # Archive and lock the thread
             if isinstance(thread, discord.Thread):
                 await thread.edit(archived=True, locked=True)
-                print(f"🗃️ Thread archived and locked for {player_name}")
+                print(f"Thread archived and locked for {player_name}")
             
-            print(f"✅ Ticket fully closed for {player_name}")
+            print(f" Ticket fully closed for {player_name}")
             logger.info(f"Ticket closed for {player_name} by {interaction.user}")
             
         except Exception as e:
             logger.error(f"Error closing ticket: {e}")
-            await interaction.followup.send("❌ Error closing ticket", ephemeral=True)
+            await interaction.followup.send(" Error closing ticket", ephemeral=True)
 
 class DiscordBot:
     def __init__(self, config, crcon_client):
@@ -438,15 +438,15 @@ class DiscordBot:
         self.crcon_client.set_message_callback(self.handle_admin_request)
         self.crcon_client.set_player_response_callback(self.handle_player_response)
         
-        print(f"🤖 Discord bot initialized")
-        print(f"📺 Admin channel ID: {self.config.get('discord.admin_channel_id')}")
+        print(f" Discord bot initialized")
+        print(f" Admin channel ID: {self.config.get('discord.admin_channel_id')}")
     
     def setup_events(self):
         """Set up Discord bot events"""
         
         @self.bot.event
         async def on_ready():
-            print(f"🤖 {self.bot.user} has connected to Discord!")
+            print(f" {self.bot.user} has connected to Discord!")
             logger.info(f'{self.bot.user} has connected to Discord!')
             
             # Add persistent view
@@ -470,21 +470,21 @@ class DiscordBot:
         try:
             channel_id = self.config.get('discord.admin_channel_id')
             if not channel_id:
-                print(f"❌ No admin channel ID configured!")
+                print(f" No admin channel ID configured!")
                 return
                 
             channel = self.bot.get_channel(int(channel_id))
             
             if not channel:
-                print(f"❌ Could not find admin channel with ID: {channel_id}")
+                print(f" Could not find admin channel with ID: {channel_id}")
                 return
             
             if not isinstance(channel, discord.ForumChannel):
-                print(f"⚠️ Channel is not a forum channel! Current type: {type(channel)}")
-                print(f"💡 Please convert your admin channel to a Forum Channel in Discord")
+                print(f"Channel is not a forum channel! Current type: {type(channel)}")
+                print(f"Please convert your admin channel to a Forum Channel in Discord")
                 return
             
-            print(f"✅ Found forum channel: {channel.name}")
+            print(f"Found forum channel: {channel.name}")
             
             # Get existing tags or create them
             existing_tags = {tag.name: tag for tag in channel.available_tags}
@@ -492,7 +492,7 @@ class DiscordBot:
             for tag_name in ['NEW', 'REPLIED', 'CLOSED']:
                 if tag_name in existing_tags:
                     self.forum_tags[tag_name] = existing_tags[tag_name]
-                    print(f"✅ Found existing tag: {tag_name}")
+                    print(f"Found existing tag: {tag_name}")
                 else:
                     # Create the tag
                     emoji_map = {'NEW': '🆕', 'REPLIED': '💬', 'CLOSED': '🔒'}
@@ -505,21 +505,21 @@ class DiscordBot:
                             moderated=False
                         )
                         self.forum_tags[tag_name] = new_tag
-                        print(f"✅ Created new tag: {tag_name}")
+                        print(f"Created new tag: {tag_name}")
                     except Exception as tag_error:
-                        print(f"❌ Failed to create tag {tag_name}: {tag_error}")
+                        print(f"Failed to create tag {tag_name}: {tag_error}")
             
-            print(f"🏷️ Forum tags setup complete!")
+            print(f"Forum tags setup complete!")
             
         except Exception as e:
-            print(f"❌ Error setting up forum tags: {e}")
+            print(f" Error setting up forum tags: {e}")
             logger.error(f"Error setting up forum tags: {e}")
     
     async def apply_forum_tag(self, thread: discord.Thread, tag_name: str):
         """Apply a forum tag to a thread"""
         try:
             if tag_name not in self.forum_tags or not self.forum_tags[tag_name]:
-                print(f"⚠️ Tag {tag_name} not available")
+                print(f" Tag {tag_name} not available")
                 return
             
             tag = self.forum_tags[tag_name]
@@ -531,30 +531,30 @@ class DiscordBot:
             new_tags = current_tags + [tag]
             
             await thread.edit(applied_tags=new_tags)
-            print(f"🏷️ Applied {tag_name} tag to thread: {thread.name}")
+            print(f" Applied {tag_name} tag to thread: {thread.name}")
             
         except Exception as e:
-            print(f"❌ Error applying forum tag {tag_name}: {e}")
+            print(f" Error applying forum tag {tag_name}: {e}")
             logger.error(f"Error applying forum tag: {e}")
     
     async def handle_admin_request(self, player_name: str, admin_message: str):
         """Handle new admin request from game"""
         try:
-            print(f"🎯 Discord handler called: {player_name} - {admin_message}")
+            print(f" Discord handler called: {player_name} - {admin_message}")
             
             channel_id = self.config.get('discord.admin_channel_id')
             if not channel_id:
-                print(f"❌ No admin channel ID configured!")
+                print(f" No admin channel ID configured!")
                 return
                 
             channel = self.bot.get_channel(int(channel_id))
             
             if not channel:
-                print(f"❌ Could not find admin channel with ID: {channel_id}")
+                print(f"Could not find admin channel with ID: {channel_id}")
                 return
             
             if not isinstance(channel, discord.ForumChannel):
-                print(f"❌ Channel is not a forum channel!")
+                print(f"Channel is not a forum channel!")
                 return
             
             # Create forum post (thread)
@@ -562,14 +562,14 @@ class DiscordBot:
             
             # Create initial embed
             embed = discord.Embed(
-                title="🚨 Admin Request",
+                title="Admin Request",
                 description=f"**Player:** {player_name}\n**Message:** {admin_message}",
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow()
             )
             embed.set_footer(text="Reply in this thread to send messages directly to the player")
             
-            print(f"📝 Creating forum post: {thread_name}")
+            print(f"Creating forum post: {thread_name}")
             
             # Create forum post with NEW tag
             new_tag = self.forum_tags.get('NEW')
@@ -581,12 +581,12 @@ class DiscordBot:
                 applied_tags=initial_tags
             )
             
-            print(f"✅ Forum post created: {thread.name}")
+            print(f"Forum post created: {thread.name}")
             
             # Add close button
             view = CloseTicketView(player_name, self)
             button_message = await thread.send(embed=discord.Embed(
-                title="🎛️ Admin Controls",
+                title="Admin Controls",
                 description=f"Ticket for **{player_name}**",
                 color=discord.Color.orange()
             ), view=view)
@@ -604,17 +604,17 @@ class DiscordBot:
             try:
                 await self.crcon_client.send_message_to_player(
                     player_name, 
-                    "✅ Requête admin reçue ! Les admins ont été avertis."
+                    " RequÃªte admin reÃ§ue ! Les admins ont Ã©tÃ© avertis."
                 )
-                print(f"✅ Confirmation sent to player")
+                print(f"Confirmation sent to player")
             except Exception as msg_error:
-                print(f"⚠️ Could not send confirmation to player: {msg_error}")
+                print(f" Could not send confirmation to player: {msg_error}")
             
-            print(f"🎉 Successfully created admin forum post for {player_name}")
+            print(f" Successfully created admin forum post for {player_name}")
             logger.info(f"Created admin forum post for {player_name}")
             
         except Exception as e:
-            print(f"❌ Error handling admin request: {e}")
+            print(f" Error handling admin request: {e}")
             logger.error(f"Error handling admin request: {e}")
             import traceback
             traceback.print_exc()
@@ -622,10 +622,10 @@ class DiscordBot:
     async def handle_player_response(self, player_name: str, message: str, event_time: str):
         """Handle player response in game"""
         try:
-            print(f"💬 Player response received: {player_name} - {message}")
+            print(f" Player response received: {player_name} - {message}")
             
             if player_name not in self.active_threads:
-                print(f"⚠️ No active thread for player: {player_name}")
+                print(f" No active thread for player: {player_name}")
                 return
             
             thread = self.active_threads[player_name]
@@ -645,7 +645,7 @@ class DiscordBot:
                 response_embed.set_footer(text=f"Game time: {event_time}")
             
             await thread.send(embed=response_embed)
-            print(f"✅ Player response posted to Discord forum")
+            print(f"Player response posted to Discord forum")
             
             # Move button to bottom
             if player_name in self.active_button_messages:
@@ -657,7 +657,7 @@ class DiscordBot:
             
             # Create new button message
             button_embed = discord.Embed(
-                title="🎛️ Admin Controls",
+                title="Admin Controls",
                 description=f"Ticket for **{player_name}** is active",
                 color=discord.Color.orange()
             )
@@ -667,7 +667,7 @@ class DiscordBot:
             self.active_button_messages[player_name] = new_button_message
             
         except Exception as e:
-            print(f"❌ Error handling player response: {e}")
+            print(f"Error handling player response: {e}")
             logger.error(f"Error handling player response: {e}")
     
     async def handle_thread_message(self, message):
@@ -693,11 +693,11 @@ class DiscordBot:
                 success = await self.crcon_client.send_message_to_player(player_name, formatted_message)
                 
                 if success:
-                    await message.add_reaction("✅")
-                    print(f"✅ Admin message sent to {player_name}")
+                    await message.add_reaction("âœ…")
+                    print(f"Admin message sent to {player_name}")
                 else:
-                    await message.add_reaction("❌")
-                    print(f"❌ Failed to send admin message to {player_name}")
+                    await message.add_reaction("âŒ")
+                    print(f"Failed to send admin message to {player_name}")
                 
                 logger.info(f"Sent message from {admin_name} to {player_name}: {message.content}")
         

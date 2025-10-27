@@ -1,4 +1,4 @@
-import yaml
+﻿import yaml
 import os
 from typing import Any, Dict
 import re
@@ -22,14 +22,14 @@ class Config:
             content = re.sub(r'\$\{([^}]+)\}', replace_env_var, content)
             
             config = yaml.safe_load(content)
-            print(f"✅ Configuration loaded from {self.config_file}")
+            print(f"Configuration loaded from {self.config_file}")
             return config
             
         except FileNotFoundError:
-            print(f"❌ Configuration file {self.config_file} not found")
+            print(f"Configuration file {self.config_file} not found")
             return {}
         except yaml.YAMLError as e:
-            print(f"❌ Error parsing YAML configuration: {e}")
+            print(f"Error parsing YAML configuration: {e}")
             return {}
     
     def get(self, key: str, default: Any = None) -> Any:
