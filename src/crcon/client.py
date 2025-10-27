@@ -322,13 +322,17 @@ class CRCONClient:
         print(f"🔍 Started monitoring for admin requests and player responses")
         logger.info("Started monitoring for admin requests via CRCON API")
         
+        # Polling configuration (defaults if not set)
+        poll_interval = int(self.config.get('crcon.poll_interval_seconds', 5))
+        error_backoff = int(self.config.get('crcon.error_backoff_seconds', 10))
+        
         while self.monitoring:
             try:
                 await self.check_for_admin_requests()
-                await asyncio.sleep(5)
+                await asyncio.sleep(poll_interval)
             except Exception as e:
                 logger.error(f"Error in monitoring loop: {e}")
-                await asyncio.sleep(10)
+                await asyncio.sleep(error_backoff)
     
     def stop_monitoring(self):
         """Stop monitoring"""
