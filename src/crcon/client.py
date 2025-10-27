@@ -342,7 +342,7 @@ class CloseTicketView(discord.ui.View):
         self.discord_bot = discord_bot
     
     @discord.ui.button(
-        label="Close Ticket", 
+        label="Fermer le ticket", 
         style=discord.ButtonStyle.danger, 
         emoji="🔒",
         custom_id="close_ticket_button"
@@ -391,8 +391,8 @@ class CloseTicketView(discord.ui.View):
             
             # Create closed embed
             closed_embed = discord.Embed(
-                title="🔒 Ticket Closed",
-                description=f"Admin ticket for **{player_name}** has been closed by {interaction.user.mention}",
+                title="🔒 Ticket fermé",
+                description=f"Le ticket de **{player_name}** à été cloturé par {interaction.user.mention}",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
             )
@@ -562,12 +562,12 @@ class DiscordBot:
             
             # Create initial embed
             embed = discord.Embed(
-                title="🚨 Admin Request",
-                description=f"**Player:** {player_name}\n**Message:** {admin_message}",
+                title="🚨 Besoin d'un modérateur",
+                description=f"**Joueur:** {player_name}\n**Message:** {admin_message}",
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow()
             )
-            embed.set_footer(text="Reply in this thread to send messages directly to the player")
+            embed.set_footer(text="Repondez dans ce fil de discussion pour envoyer un message directement au joueur.")
             
             print(f"📝 Creating forum post: {thread_name}")
             
@@ -586,8 +586,8 @@ class DiscordBot:
             # Add close button
             view = CloseTicketView(player_name, self)
             button_message = await thread.send(embed=discord.Embed(
-                title="🎛️ Admin Controls",
-                description=f"Ticket for **{player_name}**",
+                title="🎛️ Controles modérateurs ",
+                description=f"Ticket de **{player_name}**",
                 color=discord.Color.orange()
             ), view=view)
             
@@ -635,7 +635,7 @@ class DiscordBot:
             
             # Create embed for player response
             response_embed = discord.Embed(
-                title="💬 Player Response",
+                title="💬 Réponse du joueur",
                 description=f"**{player_name}:** {message}",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
@@ -657,8 +657,8 @@ class DiscordBot:
             
             # Create new button message
             button_embed = discord.Embed(
-                title="🎛️ Admin Controls",
-                description=f"Ticket for **{player_name}** is active",
+                title="🎛️ Controles modérateurs",
+                description=f"Le ticket de **{player_name}** est actif",
                 color=discord.Color.orange()
             )
             

@@ -242,7 +242,7 @@ class DiscordBot:
                         # Create embed for the additional message
                         now = datetime.now()
                         embed = discord.Embed(
-                            title="💬 Additional Message from Player",
+                            title="💬 Message additionnel du joueur",
                             description=admin_message,
                             color=discord.Color.blue(),
                             timestamp=now
@@ -288,7 +288,7 @@ class DiscordBot:
             
             # Create initial message content with admin mentions
             admin_mentions = self.get_admin_mentions()
-            initial_content = f"🚨 **NEW ADMIN REQUEST** 🚨\n{admin_mentions}" if admin_mentions else "🚨 **NEW ADMIN REQUEST** 🚨"
+            initial_content = f"🚨 **Nouveau ping MODO** 🚨\n{admin_mentions}" if admin_mentions else "🚨 **Nouveau ping MODO** 🚨"
             
             print(f"📝 Creating forum post: {post_name}")
             
@@ -317,7 +317,7 @@ class DiscordBot:
             
             # Create detailed embed with player info and request
             embed = discord.Embed(
-                title="🚨 Admin Request",
+                title="🚨 Ping MODO",
                 color=discord.Color.red(),
                 timestamp=now
             )
@@ -389,7 +389,7 @@ class DiscordBot:
             
             # Create embed for player response (without redundant player name)
             response_embed = discord.Embed(
-                title="💬 Player Response",
+                title="💬 Réponse du joueur",
                 description=message,  # Just the message, no player name since it's already in the thread title
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()

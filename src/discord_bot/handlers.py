@@ -18,7 +18,7 @@ class AdminRequestHandler:
     async def create_admin_embed(self, player_name: str, message: str) -> discord.Embed:
         """Create embed for admin request"""
         embed = discord.Embed(
-            title="🚨 Admin Request",
+            title="🚨 Ping MODO",
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
