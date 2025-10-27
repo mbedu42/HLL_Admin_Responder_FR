@@ -48,6 +48,14 @@ class CloseTicketView(discord.ui.View):
             
             # FIXED: Also clean up CRCON client tracking
             self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
+
+            # Archive and lock the thread to match CRCON behavior
+            try:
+                thread = interaction.message.channel
+                if isinstance(thread, discord.Thread):
+                    await thread.edit(archived=True, locked=True)
+            except Exception:
+                pass
             
             # Send confirmation message to player
             try:
