@@ -54,7 +54,7 @@ class CloseTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        f"✅ Votre ticket admin a été fermé par un modérateur. Merci !"
+                        f"Votre ticket admin a été fermé par un modérateur. Merci !"
                     )
                     print(f"✅ Sent close confirmation to player: {self.player_name}")
                 else:
@@ -266,7 +266,7 @@ class DiscordBot:
                 try:
                     await self.crcon_client.send_message_to_player(
                         player_name,
-                        "⚠️ Vous avez déjà un ticket admin actif. Vous pouvez répondre à votre demande en écrivant dans le chat sans réutiliser !admin."
+                        "Vous avez déjà un ticket admin actif. Vous pouvez répondre à votre demande en écrivant dans le chat sans réutiliser !admin."
                     )
                 except Exception as msg_error:
                     print(f"❌ Could not send duplicate ticket message to player: {msg_error}")
@@ -346,7 +346,7 @@ class DiscordBot:
             try:
                 await self.crcon_client.send_message_to_player(
                     player_name,
-                    "✅ Votre requête admin a bien été reçue ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
+                    "Votre requête admin a bien été reçue ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
                 )
                 print(f"✅ Sent confirmation to player: {player_name}")
             except Exception as msg_error:
@@ -462,7 +462,7 @@ class DiscordBot:
             
             try:
                 await self.crcon_client.send_message_to_player(player_name, admin_message)
-                print(f"✅ Sent admin response to {player_name}: {message.content}")
+                print(f"Sent admin response to {player_name}: {message.content}")
                 
                 # Apply REPLIED tag
                 await self.apply_forum_tag(message.channel, 'REPLIED')
