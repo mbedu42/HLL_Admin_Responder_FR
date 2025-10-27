@@ -47,7 +47,7 @@ class CloseTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        f"✅ Your admin ticket has been closed by {interaction.user.display_name}. Thank you!"
+                        f"✅ Votre ticket admin a été fermé par {interaction.user.display_name}. Merci !"
                     )
                     print(f"✅ Sent close confirmation to player: {self.player_name}")
                 else:
@@ -259,7 +259,7 @@ class DiscordBot:
                 try:
                     await self.crcon_client.send_message_to_player(
                         player_name,
-                        "⚠️ You already have an active admin ticket. You can reply to your request by typing in chat without using !admin again."
+                        "⚠️ Vous avez déjà un ticket admin actif. Vous pouvez répondre à votre demande en écrivant dans le chat sans réutiliser !admin."
                     )
                 except Exception as msg_error:
                     print(f"❌ Could not send duplicate ticket message to player: {msg_error}")
@@ -339,7 +339,7 @@ class DiscordBot:
             try:
                 await self.crcon_client.send_message_to_player(
                     player_name,
-                    "✅ Your admin request has been received! You can reply to this ticket by typing in chat (no need to use !admin again)."
+                    "✅ Votre requête admin a bien été reçue ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
                 )
                 print(f"✅ Sent confirmation to player: {player_name}")
             except Exception as msg_error:
@@ -411,8 +411,8 @@ class DiscordBot:
             
             # Create new button message
             button_embed = discord.Embed(
-                title="🎛️ Admin Controls",
-                description=f"Ticket for **{player_name}** is active",
+                title="🎛️ Controles Modérateur",
+                description=f"Le ticket de **{player_name}** est actif",
                 color=discord.Color.orange()
             )
             

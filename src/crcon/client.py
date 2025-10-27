@@ -369,7 +369,7 @@ class CloseTicketView(discord.ui.View):
             try:
                 await self.discord_bot.crcon_client.send_message_to_player(
                     player_name,
-                    "✅ Your admin ticket has been closed. Thank you!"
+                    "✅ Votre ticket admin a été fermé. Merci !"
                 )
                 print(f"✅ Sent close confirmation to player: {player_name}")
             except Exception as msg_error:
@@ -604,7 +604,7 @@ class DiscordBot:
             try:
                 await self.crcon_client.send_message_to_player(
                     player_name, 
-                    "✅ Admin request received! Admins have been notified on Discord."
+                    "✅ Requête admin reçue ! Les admins ont été avertis."
                 )
                 print(f"✅ Confirmation sent to player")
             except Exception as msg_error:

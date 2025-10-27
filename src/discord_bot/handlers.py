@@ -34,9 +34,9 @@ class AdminRequestHandler:
     async def send_player_notification(self, player_name: str, success: bool = True):
         """Send notification to player about their request"""
         if success:
-            message = "✅ Admin request received! Admins have been notified and will assist you shortly."
+            message = "✅ Requête admin reçue ! Les admins ont été avertis sur Discord, et vont vous assister sous peu."
         else:
-            message = "❌ There was an issue processing your admin request. Please try again."
+            message = "❌ Un problème est survenu lors du traitement de votre requête admin. Veuillez réessayer."
         
         await self.rcon_client.send_message_to_player(player_name, message)
     
