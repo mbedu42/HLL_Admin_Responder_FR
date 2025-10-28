@@ -618,7 +618,33 @@ class DiscordBot:
             except Exception as e:
                 print(f"❌ Failed to send message to player {player_name}: {e}")
                 await message.add_reaction("❌")
+            
+            # Auto-claim on first admin reply if not already claimed
+            if player_name not in self.claimed_by:
+                claimer = message.author.display_name
+                self.claimed_by[player_name] = claimer
                 
+                # Update controls panel to reflect claimed state
+                try:
+                    # Remove previous controls if present
+                    if player_name in self.active_button_messages:
+                        try:
+                            old_msg = self.active_button_messages[player_name]
+                            await old_msg.edit(view=None)
+                        except Exception:
+                            pass
+                    # Post claimed controls with Close button only
+                    controls_embed = discord.Embed(
+                        title="🎛️ Statut du ticket",
+                        description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
+                        color=discord.Color.blue(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    view = CloseTicketView(player_name, self)
+                    new_msg = await message.channel.send(embed=controls_embed, view=view)
+                    self.active_button_messages[player_name] = new_msg
+                except Exception as panel_err:
+                    print(f"? Failed to update claimed controls panel: {panel_err}")
         except Exception as e:
             print(f"❌ Error handling thread message: {e}")
             logger.error(f"Error handling thread message: {e}")
