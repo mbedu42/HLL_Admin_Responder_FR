@@ -1,4 +1,4 @@
-﻿import discord
+import discord
 from discord.ext import commands
 import logging
 from typing import Dict, Optional, List
@@ -25,7 +25,7 @@ class CloseTicketView(discord.ui.View):
             
             # Update the controls embed to show closed state in green and remove controls
             closed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
                 description=f"Le ticket de **{self.player_name}** est clôturé",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
@@ -45,10 +45,6 @@ class CloseTicketView(discord.ui.View):
             # Remove from active button messages (Discord bot)
             if self.player_name in self.discord_bot.active_button_messages:
                 del self.discord_bot.active_button_messages[self.player_name]
-
-            # Clear claimed state for this player (so future tickets start fresh)
-            if self.player_name in self.discord_bot.claimed_by:
-                del self.discord_bot.claimed_by[self.player_name]
             
             # FIXED: Also clean up CRCON client tracking
             self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
@@ -76,12 +72,6 @@ class CloseTicketView(discord.ui.View):
                 
             print(f"🔧 Ticket closed for {self.player_name} by {interaction.user.display_name}")
 
-        except Exception as e:
-            print(f"Error closing ticket: {e}")
-            try:
-                await interaction.response.send_message("Error closing ticket", ephemeral=True)
-            except Exception:
-                pass
 class ClaimTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
         super().__init__(timeout=None)
@@ -96,7 +86,7 @@ class ClaimTicketView(discord.ui.View):
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             claimed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
                 description=f"{interaction.user.display_name} has claimed the ticket.",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
@@ -109,7 +99,7 @@ class ClaimTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        "Un modérateur s'occupe maintenant de votre demande."
+                        "✅ An admin is now taking care of your demand."
                     )
             except Exception:
                 pass
@@ -137,7 +127,7 @@ class ClaimTicketView(discord.ui.View):
             
             # Update the controls embed to show closed state in green and remove controls
             closed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
                 description=f"Le ticket de **{self.player_name}** est clôturé",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
@@ -457,22 +447,14 @@ class DiscordBot:
             # Post the detailed embed without controls
             await thread.send(embed=embed)
 
-                        # Send initial controls panel (claim stage or already claimed)
-            claimer = self.claimed_by.get(player_name)
-            if claimer:
-                controls_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
-                    timestamp=now
-                )
-                view = CloseTicketView(player_name, self)
-            else:
-                controls_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - en attente",
-                    timestamp=now
-                )
-                view = ClaimTicketView(player_name, self)
+            # Send initial controls panel (claim stage)
+            controls_embed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                title="??? Controles Mod�rateur",
+                description=f"Ticket de **{player_name}** - en attente",
+                timestamp=now
+            )
+            view = ClaimTicketView(player_name, self)
             button_message = await thread.send(embed=controls_embed, view=view)
             self.active_button_messages[player_name] = button_message
             
@@ -553,22 +535,13 @@ class DiscordBot:
                     pass
             
             # Create new button message
-                        # Create new controls message (respect claimed state)
-            claimer = self.claimed_by.get(player_name)
-            if claimer:
-                button_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
-                    color=discord.Color.blue()
-                )
-                view = CloseTicketView(player_name, self)
-            else:
-                button_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - en attente",
-                    color=discord.Color.blue()
-                )
-                view = ClaimTicketView(player_name, self)
+            # Create new controls message
+            button_embed = discord.Embed(
+                title="??? Controles Mod�rateur",
+                description=f"Ticket de **{player_name}** - en attente",
+                color=discord.Color.blue()
+            
+            view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
             
@@ -618,33 +591,7 @@ class DiscordBot:
             except Exception as e:
                 print(f"❌ Failed to send message to player {player_name}: {e}")
                 await message.add_reaction("❌")
-            
-            # Auto-claim on first admin reply if not already claimed
-            if player_name not in self.claimed_by:
-                claimer = message.author.display_name
-                self.claimed_by[player_name] = claimer
                 
-                # Update controls panel to reflect claimed state
-                try:
-                    # Remove previous controls if present
-                    if player_name in self.active_button_messages:
-                        try:
-                            old_msg = self.active_button_messages[player_name]
-                            await old_msg.edit(view=None)
-                        except Exception:
-                            pass
-                    # Post claimed controls with Close button only
-                    controls_embed = discord.Embed(
-                        title="🎛️ Statut du ticket",
-                        description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
-                        color=discord.Color.blue(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    view = CloseTicketView(player_name, self)
-                    new_msg = await message.channel.send(embed=controls_embed, view=view)
-                    self.active_button_messages[player_name] = new_msg
-                except Exception as panel_err:
-                    print(f"? Failed to update claimed controls panel: {panel_err}")
         except Exception as e:
             print(f"❌ Error handling thread message: {e}")
             logger.error(f"Error handling thread message: {e}")
@@ -663,4 +610,3 @@ class DiscordBot:
             print(f"❌ Failed to start Discord bot: {e}")
             logger.error(f"Failed to start Discord bot: {e}")
             raise
-

@@ -18,7 +18,7 @@ class AdminRequestHandler:
     async def create_admin_embed(self, player_name: str, message: str) -> discord.Embed:
         """Create embed for admin request"""
         embed = discord.Embed(
-            title="🚨 Admin Request",
+            title="🚨 Ping MODO",
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
@@ -34,9 +34,9 @@ class AdminRequestHandler:
     async def send_player_notification(self, player_name: str, success: bool = True):
         """Send notification to player about their request"""
         if success:
-            message = "✅ Requête admin reçue ! Les admins ont été avertis sur Discord, et vont vous assister sous peu."
+            message = "Requête admin reçue ! Les admins ont été avertis sur Discord, et vont vous assister sous peu."
         else:
-            message = "❌ Un problème est survenu lors du traitement de votre requête admin. Veuillez réessayer."
+            message = "Un problème est survenu lors du traitement de votre requête admin. Veuillez réessayer."
         
         await self.rcon_client.send_message_to_player(player_name, message)
     
