@@ -1,4 +1,4 @@
-import discord
+﻿import discord
 from discord.ext import commands
 import logging
 from typing import Dict, Optional, List
@@ -15,7 +15,7 @@ class CloseTicketView(discord.ui.View):
     @discord.ui.button(
         label="Fermer le ticket", 
         style=discord.ButtonStyle.danger, 
-        emoji="🔒",
+        emoji="ðŸ”’",
         custom_id="close_ticket_button"
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -25,8 +25,8 @@ class CloseTicketView(discord.ui.View):
             
             # Update the controls embed to show closed state in green and remove controls
             closed_embed = discord.Embed(
-                title="🎛️ Controles Modérateur",
-                description=f"Le ticket de **{self.player_name}** est clôturé",
+                title="ðŸŽ›ï¸ Controles ModÃ©rateur",
+                description=f"Le ticket de **{self.player_name}** est clÃ´turÃ©",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
             )
@@ -62,15 +62,15 @@ class CloseTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        f"Votre ticket admin a été fermé par un modérateur. Merci !"
+                        f"Votre ticket admin a Ã©tÃ© fermÃ© par un modÃ©rateur. Merci !"
                     )
-                    print(f"✅. Sent close confirmation to player: {self.player_name}")
+                    print(f"âœ…. Sent close confirmation to player: {self.player_name}")
                 else:
-                    print(f"⚠️ CRCON client not available to send close confirmation")
+                    print(f"âš ï¸ CRCON client not available to send close confirmation")
             except Exception as msg_error:
-                print(f"⚠️ Could not send close confirmation to player: {msg_error}")
+                print(f"âš ï¸ Could not send close confirmation to player: {msg_error}")
                 
-            print(f"🔧 Ticket closed for {self.player_name} by {interaction.user.display_name}")
+            print(f"ðŸ”§ Ticket closed for {self.player_name} by {interaction.user.display_name}")
 
 class ClaimTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
@@ -99,7 +99,7 @@ class ClaimTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        "✅ An admin is now taking care of your demand."
+                        "âœ… An admin is now taking care of your demand."
                     )
             except Exception:
                 pass
@@ -114,73 +114,6 @@ class ClaimTicketView(discord.ui.View):
             except:
                 pass
     
-    @discord.ui.button(
-        label="Fermer le ticket", 
-        style=discord.ButtonStyle.danger, 
-        emoji="🔒",
-        custom_id="close_ticket_button"
-    )
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # Apply CLOSED tag to thread
-            await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
-            
-            # Update the controls embed to show closed state in green and remove controls
-            closed_embed = discord.Embed(
-                title="🎛️ Controles Modérateur",
-                description=f"Le ticket de **{self.player_name}** est clôturé",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow()
-            )
-            # Disable the button and update embed on the message with the component
-            self.clear_items()
-            await interaction.response.edit_message(embed=closed_embed, view=None)
-            
-            # Remove player from active tickets tracking (Discord bot)
-            if self.player_name in self.discord_bot.player_tickets:
-                del self.discord_bot.player_tickets[self.player_name]
-            
-            # Remove from active threads (Discord bot)
-            if self.player_name in self.discord_bot.active_threads:
-                del self.discord_bot.active_threads[self.player_name]
-                
-            # Remove from active button messages (Discord bot)
-            if self.player_name in self.discord_bot.active_button_messages:
-                del self.discord_bot.active_button_messages[self.player_name]
-            
-            # FIXED: Also clean up CRCON client tracking
-            self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
-
-            # Archive and lock the thread to match CRCON behavior
-            try:
-                thread = interaction.message.channel
-                if isinstance(thread, discord.Thread):
-                    await thread.edit(archived=True, locked=True)
-            except Exception:
-                pass
-            
-            # Send confirmation message to player
-            try:
-                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
-                    await self.discord_bot.crcon_client.send_message_to_player(
-                        self.player_name,
-                        f"Votre ticket admin a été fermé par un modérateur. Merci !"
-                    )
-                    print(f"✅ Sent close confirmation to player: {self.player_name}")
-                else:
-                    print(f"⚠️ CRCON client not available to send close confirmation")
-            except Exception as msg_error:
-                print(f"⚠️ Could not send close confirmation to player: {msg_error}")
-                
-            print(f"🔒 Ticket closed for {self.player_name} by {interaction.user.display_name}")
-            
-        except Exception as e:
-            print(f"❌ Error closing ticket: {e}")
-            try:
-                await interaction.response.send_message("❌ Error closing ticket", ephemeral=True)
-            except:
-                pass
-
 class DiscordBot:
     def __init__(self, config, crcon_client):
         self.config = config
@@ -210,8 +143,8 @@ class DiscordBot:
         self.crcon_client.set_message_callback(self.handle_admin_request)
         self.crcon_client.set_player_response_callback(self.handle_player_response)
         
-        print(f"🤖 Discord bot initialized")
-        print(f"📺 Admin channel ID: {self.config.get('discord.admin_channel_id')}")
+        print(f"ðŸ¤– Discord bot initialized")
+        print(f"ðŸ“º Admin channel ID: {self.config.get('discord.admin_channel_id')}")
     
     def get_admin_mentions(self) -> str:
         """Get admin role mentions"""
@@ -230,7 +163,7 @@ class DiscordBot:
         
         @self.bot.event
         async def on_ready():
-            print(f"🤖 {self.bot.user} has connected to Discord!")
+            print(f"ðŸ¤– {self.bot.user} has connected to Discord!")
             logger.info(f'{self.bot.user} has connected to Discord!')
             
             # Setup forum tags
@@ -270,28 +203,28 @@ class DiscordBot:
                 if player_name in self.active_button_messages:
                     del self.active_button_messages[player_name]
             
-            await ctx.send(f"🧹 Cleaned up {cleaned} deleted ticket(s)")
+            await ctx.send(f"ðŸ§¹ Cleaned up {cleaned} deleted ticket(s)")
     
     async def setup_forum_tags(self):
         """Setup or get existing forum tags"""
         try:
             channel_id = self.config.get('discord.admin_channel_id')
             if not channel_id:
-                print(f"❌ No admin channel ID configured!")
+                print(f"âŒ No admin channel ID configured!")
                 return
                 
             channel = self.bot.get_channel(int(channel_id))
             
             if not channel:
-                print(f"❌ Could not find admin channel with ID: {channel_id}")
+                print(f"âŒ Could not find admin channel with ID: {channel_id}")
                 return
             
             if not isinstance(channel, discord.ForumChannel):
-                print(f"⚠️ Channel is not a forum channel! Current type: {type(channel)}")
-                print(f"💡 Please convert your admin channel to a Forum Channel in Discord")
+                print(f"âš ï¸ Channel is not a forum channel! Current type: {type(channel)}")
+                print(f"ðŸ’¡ Please convert your admin channel to a Forum Channel in Discord")
                 return
             
-            print(f"✅ Found forum channel: {channel.name}")
+            print(f"âœ… Found forum channel: {channel.name}")
             
             # Get existing tags or create them
             existing_tags = {tag.name: tag for tag in channel.available_tags}
@@ -299,10 +232,10 @@ class DiscordBot:
             for tag_name in ['NEW', 'REPLIED', 'CLOSED']:
                 if tag_name in existing_tags:
                     self.forum_tags[tag_name] = existing_tags[tag_name]
-                    print(f"✅ Found existing tag: {tag_name}")
+                    print(f"âœ… Found existing tag: {tag_name}")
                 else:
                     # Create the tag
-                    emoji_map = {'NEW': '🆕', 'REPLIED': '💬', 'CLOSED': '🔒'}
+                    emoji_map = {'NEW': 'ðŸ†•', 'REPLIED': 'ðŸ’¬', 'CLOSED': 'ðŸ”’'}
                     
                     try:
                         new_tag = await channel.create_tag(
@@ -311,21 +244,21 @@ class DiscordBot:
                             moderated=False
                         )
                         self.forum_tags[tag_name] = new_tag
-                        print(f"✅ Created new tag: {tag_name}")
+                        print(f"âœ… Created new tag: {tag_name}")
                     except Exception as tag_error:
-                        print(f"❌ Failed to create tag {tag_name}: {tag_error}")
+                        print(f"âŒ Failed to create tag {tag_name}: {tag_error}")
             
-            print(f"🏷️ Forum tags setup complete!")
+            print(f"ðŸ·ï¸ Forum tags setup complete!")
             
         except Exception as e:
-            print(f"❌ Error setting up forum tags: {e}")
+            print(f"âŒ Error setting up forum tags: {e}")
             logger.error(f"Error setting up forum tags: {e}")
     
     async def apply_forum_tag(self, thread: discord.Thread, tag_name: str):
         """Apply a forum tag to a thread"""
         try:
             if tag_name not in self.forum_tags or not self.forum_tags[tag_name]:
-                print(f"⚠️ Tag {tag_name} not available")
+                print(f"âš ï¸ Tag {tag_name} not available")
                 return
             
             tag = self.forum_tags[tag_name]
@@ -337,20 +270,20 @@ class DiscordBot:
             new_tags = current_tags + [tag]
             
             await thread.edit(applied_tags=new_tags)
-            print(f"🏷️ Applied {tag_name} tag to thread: {thread.name}")
+            print(f"ðŸ·ï¸ Applied {tag_name} tag to thread: {thread.name}")
             
         except Exception as e:
-            print(f"❌ Error applying forum tag {tag_name}: {e}")
+            print(f"âŒ Error applying forum tag {tag_name}: {e}")
             logger.error(f"Error applying forum tag: {e}")
     
     async def handle_admin_request(self, player_name: str, admin_message: str):
         """Handle new admin request from game"""
         try:
-            print(f"🎯 Discord handler called: {player_name} - {admin_message}")
+            print(f"ðŸŽ¯ Discord handler called: {player_name} - {admin_message}")
             
             # Check if player already has an active ticket
             if player_name in self.player_tickets and self.player_tickets[player_name]:
-                print(f"⚠️ Player {player_name} already has an active ticket")
+                print(f"âš ï¸ Player {player_name} already has an active ticket")
                 
                 # Add their message to the existing ticket if they provided one
                 if admin_message and admin_message.strip() and player_name in self.active_threads:
@@ -360,7 +293,7 @@ class DiscordBot:
                         # Create embed for the additional message
                         now = datetime.now()
                         embed = discord.Embed(
-                            title="💬 Message additionnel du joueur",
+                            title="ðŸ’¬ Message additionnel du joueur",
                             description=admin_message,
                             color=discord.Color.blue(),
                             timestamp=now
@@ -368,34 +301,34 @@ class DiscordBot:
                         embed.set_footer(text=f"From: {player_name}")
                         
                         await thread.send(embed=embed)
-                        print(f"✅ Added player message to existing ticket: {player_name}")
+                        print(f"âœ… Added player message to existing ticket: {player_name}")
                         
                     except Exception as thread_error:
-                        print(f"❌ Could not add message to existing thread: {thread_error}")
+                        print(f"âŒ Could not add message to existing thread: {thread_error}")
                 
                 # Send active ticket message
                 try:
                     await self.crcon_client.send_message_to_player(
                         player_name,
-                        "Vous avez déjà un ticket admin actif. Vous pouvez répondre à votre demande en écrivant dans le chat sans réutiliser !admin."
+                        "Vous avez dÃ©jÃ  un ticket admin actif. Vous pouvez rÃ©pondre Ã  votre demande en Ã©crivant dans le chat sans rÃ©utiliser !admin."
                     )
                 except Exception as msg_error:
-                    print(f"❌ Could not send duplicate ticket message to player: {msg_error}")
+                    print(f"âŒ Could not send duplicate ticket message to player: {msg_error}")
                 return
             
             channel_id = self.config.get('discord.admin_channel_id')
             if not channel_id:
-                print("❌ No admin channel ID configured")
+                print("âŒ No admin channel ID configured")
                 return
                 
             channel = self.bot.get_channel(int(channel_id))
             
             if not channel:
-                print(f"❌ Could not find channel with ID: {channel_id}")
+                print(f"âŒ Could not find channel with ID: {channel_id}")
                 return
             
             if not isinstance(channel, discord.ForumChannel):
-                print(f"❌ Channel {channel_id} is not a forum channel")
+                print(f"âŒ Channel {channel_id} is not a forum channel")
                 return
             
             # Create forum post with date and time
@@ -406,9 +339,9 @@ class DiscordBot:
             
             # Create initial message content with admin mentions
             admin_mentions = self.get_admin_mentions()
-            initial_content = f"🚨 **Nouveau ping MODO** 🚨\n{admin_mentions}" if admin_mentions else "🚨 **Nouveau ping MODO** 🚨"
+            initial_content = f"ðŸš¨ **Nouveau ping MODO** ðŸš¨\n{admin_mentions}" if admin_mentions else "ðŸš¨ **Nouveau ping MODO** ðŸš¨"
             
-            print(f"📝 Creating forum post: {post_name}")
+            print(f"ðŸ“ Creating forum post: {post_name}")
             
             # Create forum post with NEW tag
             new_tag = self.forum_tags.get('NEW')
@@ -435,22 +368,22 @@ class DiscordBot:
             
             # Create detailed embed with player info and request
             embed = discord.Embed(
-                title="🚨 Ping MODO",
+                title="ðŸš¨ Ping MODO",
                 color=discord.Color.red(),
                 timestamp=now
             )
             
-            embed.add_field(name="👤 Player", value=player_name, inline=True)
-            embed.add_field(name="🕐 Time", value=f"{date_str} {time_str}", inline=True)
-            embed.add_field(name="💬 Message", value=admin_message or "No additional message", inline=False)
+            embed.add_field(name="ðŸ‘¤ Player", value=player_name, inline=True)
+            embed.add_field(name="ðŸ• Time", value=f"{date_str} {time_str}", inline=True)
+            embed.add_field(name="ðŸ’¬ Message", value=admin_message or "No additional message", inline=False)
             
             # Post the detailed embed without controls
             await thread.send(embed=embed)
 
             # Send initial controls panel (claim stage)
             controls_embed = discord.Embed(
-                title="🎛️ Controles Modérateur",
-                title="??? Controles Mod�rateur",
+                title="ðŸŽ›ï¸ Controles ModÃ©rateur",
+                title="??? Controles Modérateur",
                 description=f"Ticket de **{player_name}** - en attente",
                 timestamp=now
             )
@@ -458,29 +391,29 @@ class DiscordBot:
             button_message = await thread.send(embed=controls_embed, view=view)
             self.active_button_messages[player_name] = button_message
             
-            print(f"✅ Created admin request thread for {player_name}")
+            print(f"âœ… Created admin request thread for {player_name}")
             
             # Send confirmation to player
             try:
                 await self.crcon_client.send_message_to_player(
                     player_name,
-                    "Votre requête admin a bien été reçue ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
+                    "Votre requÃªte admin a bien Ã©tÃ© reÃ§ue ! Vous pouvez rÃ©pondre Ã  ce ticket en Ã©crivant dans le chat (inutile de rÃ©utiliser !admin)."
                 )
-                print(f"✅ Sent confirmation to player: {player_name}")
+                print(f"âœ… Sent confirmation to player: {player_name}")
             except Exception as msg_error:
-                print(f"❌ Could not send confirmation to player: {msg_error}")
+                print(f"âŒ Could not send confirmation to player: {msg_error}")
             
         except Exception as e:
-            print(f"❌ Error handling admin request: {e}")
+            print(f"âŒ Error handling admin request: {e}")
             logger.error(f"Error handling admin request: {e}")
 
     async def handle_player_response(self, player_name: str, message: str, event_time: str):
         """Handle player response in game"""
         try:
-            print(f"💬 Player response received: {player_name} - {message}")
+            print(f"ðŸ’¬ Player response received: {player_name} - {message}")
             
             if player_name not in self.active_threads:
-                print(f"⚠️ No active thread for player: {player_name}")
+                print(f"âš ï¸ No active thread for player: {player_name}")
                 return
             
             thread = self.active_threads[player_name]
@@ -494,7 +427,7 @@ class DiscordBot:
                     raise discord.NotFound("Thread parent not found")
                     
             except (discord.NotFound, discord.Forbidden, AttributeError):
-                print(f"🗑️ Thread for {player_name} was deleted, cleaning up tracking...")
+                print(f"ðŸ—‘ï¸ Thread for {player_name} was deleted, cleaning up tracking...")
                 # Clean up all tracking for this player
                 if player_name in self.player_tickets:
                     del self.player_tickets[player_name]
@@ -506,7 +439,7 @@ class DiscordBot:
                 # Clean up CRCON tracking
                 self.crcon_client.unregister_admin_thread(player_name)
                 
-                print(f"✅ Cleaned up tracking for {player_name}, they can create new tickets now")
+                print(f"âœ… Cleaned up tracking for {player_name}, they can create new tickets now")
                 return
             
             # Apply NEW tag (player has responded, needs admin attention)
@@ -514,7 +447,7 @@ class DiscordBot:
             
             # Create embed for player response (without redundant player name)
             response_embed = discord.Embed(
-                title="💬 Réponse du joueur",
+                title="ðŸ’¬ RÃ©ponse du joueur",
                 description=message,  # Just the message, no player name since it's already in the thread title
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
@@ -524,7 +457,7 @@ class DiscordBot:
                 response_embed.set_footer(text=f"Game time: {event_time}")
             
             await thread.send(embed=response_embed)
-            print(f"✅ Player response posted to Discord forum")
+            print(f"âœ… Player response posted to Discord forum")
             
             # Move button to bottom
             if player_name in self.active_button_messages:
@@ -537,16 +470,16 @@ class DiscordBot:
             # Create new button message
             # Create new controls message
             button_embed = discord.Embed(
-                title="??? Controles Mod�rateur",
+                title="🎛️ Controles Modérateur",
                 description=f"Ticket de **{player_name}** - en attente",
                 color=discord.Color.blue()
-            
+            )
             view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
-            
+            self.active_button_messages[player_name] = new_button_message
         except Exception as e:
-            print(f"❌ Error handling player response: {e}")
+            print(f"âŒ Error handling player response: {e}")
             logger.error(f"Error handling player response: {e}")
 
     async def handle_thread_message(self, message: discord.Message):
@@ -568,7 +501,7 @@ class DiscordBot:
                     break
             
             if not player_name:
-                print(f"⚠️ Could not find player for thread: {message.channel.name}")
+                print(f"âš ï¸ Could not find player for thread: {message.channel.name}")
                 return
             
             # Skip system messages and embeds
@@ -586,14 +519,14 @@ class DiscordBot:
                 await self.apply_forum_tag(message.channel, 'REPLIED')
                 
                 # Add reaction to confirm message was sent
-                await message.add_reaction("✅")
+                await message.add_reaction("âœ…")
                 
             except Exception as e:
-                print(f"❌ Failed to send message to player {player_name}: {e}")
-                await message.add_reaction("❌")
+                print(f"âŒ Failed to send message to player {player_name}: {e}")
+                await message.add_reaction("âŒ")
                 
         except Exception as e:
-            print(f"❌ Error handling thread message: {e}")
+            print(f"âŒ Error handling thread message: {e}")
             logger.error(f"Error handling thread message: {e}")
 
     async def start(self):
@@ -603,10 +536,10 @@ class DiscordBot:
             if not token:
                 raise ValueError("Discord token not found in config")
             
-            print(f"🚀 Starting Discord bot...")
+            print(f"ðŸš€ Starting Discord bot...")
             await self.bot.start(token)
             
         except Exception as e:
-            print(f"❌ Failed to start Discord bot: {e}")
+            print(f"âŒ Failed to start Discord bot: {e}")
             logger.error(f"Failed to start Discord bot: {e}")
             raise
