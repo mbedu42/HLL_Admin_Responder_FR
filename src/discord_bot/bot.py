@@ -11,6 +11,108 @@ class CloseTicketView(discord.ui.View):
         super().__init__(timeout=None)
         self.player_name = player_name
         self.discord_bot = discord_bot
+
+    @discord.ui.button(
+        label="Fermer le ticket", 
+        style=discord.ButtonStyle.danger, 
+        emoji="🔒",
+        custom_id="close_ticket_button"
+    )
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Apply CLOSED tag to thread
+            await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
+            
+            # Update the controls embed to show closed state in green and remove controls
+            closed_embed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                description=f"Le ticket de **{self.player_name}** est clôturé",
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow()
+            )
+            # Disable the button and update embed on the message with the component
+            self.clear_items()
+            await interaction.response.edit_message(embed=closed_embed, view=None)
+            
+            # Remove player from active tickets tracking (Discord bot)
+            if self.player_name in self.discord_bot.player_tickets:
+                del self.discord_bot.player_tickets[self.player_name]
+            
+            # Remove from active threads (Discord bot)
+            if self.player_name in self.discord_bot.active_threads:
+                del self.discord_bot.active_threads[self.player_name]
+                
+            # Remove from active button messages (Discord bot)
+            if self.player_name in self.discord_bot.active_button_messages:
+                del self.discord_bot.active_button_messages[self.player_name]
+            
+            # FIXED: Also clean up CRCON client tracking
+            self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
+
+            # Archive and lock the thread to match CRCON behavior
+            try:
+                thread = interaction.message.channel
+                if isinstance(thread, discord.Thread):
+                    await thread.edit(archived=True, locked=True)
+            except Exception:
+                pass
+            
+            # Send confirmation message to player
+            try:
+                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
+                    await self.discord_bot.crcon_client.send_message_to_player(
+                        self.player_name,
+                        f"Votre ticket admin a été fermé par un modérateur. Merci !"
+                    )
+                    print(f"✅. Sent close confirmation to player: {self.player_name}")
+                else:
+                    print(f"⚠️ CRCON client not available to send close confirmation")
+            except Exception as msg_error:
+                print(f"⚠️ Could not send close confirmation to player: {msg_error}")
+                
+            print(f"🔧 Ticket closed for {self.player_name} by {interaction.user.display_name}")
+
+class ClaimTicketView(discord.ui.View):
+    def __init__(self, player_name: str, discord_bot):
+        super().__init__(timeout=None)
+        self.player_name = player_name
+        self.discord_bot = discord_bot
+
+    @discord.ui.button(
+        label="Claim Ticket",
+        style=discord.ButtonStyle.primary,
+        custom_id="claim_ticket_button"
+    )
+    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            claimed_embed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                description=f"{interaction.user.display_name} has claimed the ticket.",
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            new_view = CloseTicketView(self.player_name, self.discord_bot)
+            await interaction.response.edit_message(embed=claimed_embed, view=new_view)
+
+            # Notify player in-game via CRCON
+            try:
+                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
+                    await self.discord_bot.crcon_client.send_message_to_player(
+                        self.player_name,
+                        "✅ An admin is now taking care of your demand."
+                    )
+            except Exception:
+                pass
+            # Record claimer for future panels
+            try:
+                self.discord_bot.claimed_by[self.player_name] = interaction.user.display_name
+            except Exception:
+                pass
+        except Exception:
+            try:
+                await interaction.response.send_message("Error claiming ticket", ephemeral=True)
+            except:
+                pass
     
     @discord.ui.button(
         label="Fermer le ticket", 
@@ -86,6 +188,7 @@ class DiscordBot:
         self.active_threads: Dict[str, discord.Thread] = {}
         self.active_button_messages: Dict[str, discord.Message] = {}
         self.player_tickets: Dict[str, bool] = {}  # Track players with active tickets
+        self.claimed_by: Dict[str, str] = {}  # Track who claimed a ticket
         
         # Forum tags (will be populated on startup)
         self.forum_tags = {
@@ -341,11 +444,18 @@ class DiscordBot:
             embed.add_field(name="🕐 Time", value=f"{date_str} {time_str}", inline=True)
             embed.add_field(name="💬 Message", value=admin_message or "No additional message", inline=False)
             
-            # Create close ticket button
-            view = CloseTicketView(player_name, self)
-            
-            # Send embed with button
-            button_message = await thread.send(embed=embed, view=view)
+            # Post the detailed embed without controls
+            await thread.send(embed=embed)
+
+            # Send initial controls panel (claim stage)
+            controls_embed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                title="??? Controles Mod�rateur",
+                description=f"Ticket de **{player_name}** - en attente",
+                timestamp=now
+            )
+            view = ClaimTicketView(player_name, self)
+            button_message = await thread.send(embed=controls_embed, view=view)
             self.active_button_messages[player_name] = button_message
             
             print(f"✅ Created admin request thread for {player_name}")
@@ -425,13 +535,13 @@ class DiscordBot:
                     pass
             
             # Create new button message
+            # Create new controls message
             button_embed = discord.Embed(
-                title="🎛️ Controles Modérateur",
-                description=f"Le ticket de **{player_name}** est actif",
-                color=discord.Color.orange()
-            )
+                title="??? Controles Mod�rateur",
+                description=f"Ticket de **{player_name}** - en attente",
+                color=discord.Color.blue()
             
-            view = CloseTicketView(player_name, self)
+            view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
             

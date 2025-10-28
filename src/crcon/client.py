@@ -339,6 +339,44 @@ class CRCONClient:
         self.monitoring = False
         logger.info("Stopped monitoring for admin requests")
 
+class ClaimTicketView(discord.ui.View):
+    def __init__(self, player_name: str, discord_bot):
+        super().__init__(timeout=None)
+        self.player_name = player_name
+        self.discord_bot = discord_bot
+
+    @discord.ui.button(
+        label="Claim Ticket",
+        style=discord.ButtonStyle.primary,
+        custom_id="claim_ticket_button"
+    )
+    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Build a light blue claimed embed
+            claimed_embed = discord.Embed(
+                title="🎛️ Controles Modérateur",
+                description=f"{interaction.user.display_name} à pris en charge le ticket.",
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            # After claim, show Close button next
+            new_view = CloseTicketView(self.player_name, self.discord_bot)
+            await interaction.response.edit_message(embed=claimed_embed, view=new_view)
+
+            # Notify player in-game
+            try:
+                await self.discord_bot.crcon_client.send_message_to_player(
+                    self.player_name,
+                    "Un modérateur s'occupe maintenant de votre demande."
+                )
+            except Exception:
+                pass
+        except Exception:
+            try:
+                await interaction.response.send_message("Error claiming ticket", ephemeral=True)
+            except:
+                pass
+
 class CloseTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
         super().__init__(timeout=None)
@@ -462,8 +500,9 @@ class DiscordBot:
             print(f"🤖 {self.bot.user} has connected to Discord!")
             logger.info(f'{self.bot.user} has connected to Discord!')
             
-            # Add persistent view
+            # Add persistent views
             self.bot.add_view(CloseTicketView("", self))
+            self.bot.add_view(ClaimTicketView("", self))
             
             # Setup forum tags
             await self.setup_forum_tags()
@@ -597,11 +636,11 @@ class DiscordBot:
             print(f"✅ Forum post created: {thread.name}")
             
             # Add close button
-            view = CloseTicketView(player_name, self)
+            view = ClaimTicketView(player_name, self)
             button_message = await thread.send(embed=discord.Embed(
                 title="🎛️ Controles modérateurs ",
-                description=f"Ticket de **{player_name}**",
-                color=discord.Color.orange()
+                description=f"Ticket de **{player_name}** — en attente",
+                color=discord.Color.blue()
             ), view=view)
             
             # Store the thread and button message
@@ -671,11 +710,11 @@ class DiscordBot:
             # Create new button message
             button_embed = discord.Embed(
                 title="🎛️ Controles modérateurs",
-                description=f"Le ticket de **{player_name}** est actif",
-                color=discord.Color.orange()
+                description=f"Ticket de **{player_name}** — en attente",
+                color=discord.Color.blue()
             )
             
-            view = CloseTicketView(player_name, self)
+            view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
             
