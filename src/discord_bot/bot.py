@@ -109,7 +109,7 @@ class ClaimTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        "An admin is now taking care of your demand."
+                        "Un modérateur s'occupe maintenant de votre demande."
                     )
             except Exception:
                 pass
