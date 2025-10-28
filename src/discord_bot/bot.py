@@ -545,7 +545,7 @@ class DiscordBot:
                 title="🎛️ Statut du ticket",
                 description=f"Ticket de **{player_name}** - en attente",
                 color=discord.Color.blue()
-            
+            )
             view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
