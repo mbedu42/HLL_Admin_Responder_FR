@@ -42,13 +42,13 @@ class CloseTicketView(discord.ui.View):
             if self.player_name in self.discord_bot.active_threads:
                 del self.discord_bot.active_threads[self.player_name]
                 
-              # Remove from active button messages (Discord bot)
-              if self.player_name in self.discord_bot.active_button_messages:
-                  del self.discord_bot.active_button_messages[self.player_name]
+            # Remove from active button messages (Discord bot)
+            if self.player_name in self.discord_bot.active_button_messages:
+                del self.discord_bot.active_button_messages[self.player_name]
 
-              # Clear claimed state for this player (so future tickets start fresh)
-              if self.player_name in self.discord_bot.claimed_by:
-                  del self.discord_bot.claimed_by[self.player_name]
+            # Clear claimed state for this player (so future tickets start fresh)
+            if self.player_name in self.discord_bot.claimed_by:
+                del self.discord_bot.claimed_by[self.player_name]
             
             # FIXED: Also clean up CRCON client tracking
             self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
