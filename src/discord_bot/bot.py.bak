@@ -1,4 +1,4 @@
-﻿import discord
+import discord
 from discord.ext import commands
 import logging
 from typing import Dict, Optional, List
@@ -25,7 +25,7 @@ class CloseTicketView(discord.ui.View):
             
             # Update the controls embed to show closed state in green and remove controls
             closed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
                 description=f"Le ticket de **{self.player_name}** est clôturé",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
@@ -72,12 +72,6 @@ class CloseTicketView(discord.ui.View):
                 
             print(f"🔧 Ticket closed for {self.player_name} by {interaction.user.display_name}")
 
-        except Exception as e:
-            print(f"Error closing ticket: {e}")
-            try:
-                await interaction.response.send_message("Error closing ticket", ephemeral=True)
-            except Exception:
-                pass
 class ClaimTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
         super().__init__(timeout=None)
@@ -92,7 +86,7 @@ class ClaimTicketView(discord.ui.View):
     async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             claimed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
                 description=f"{interaction.user.display_name} has claimed the ticket.",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
@@ -105,7 +99,7 @@ class ClaimTicketView(discord.ui.View):
                 if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
                     await self.discord_bot.crcon_client.send_message_to_player(
                         self.player_name,
-                        "An admin is now taking care of your demand."
+                        "✅ An admin is now taking care of your demand."
                     )
             except Exception:
                 pass
@@ -133,7 +127,7 @@ class ClaimTicketView(discord.ui.View):
             
             # Update the controls embed to show closed state in green and remove controls
             closed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
                 description=f"Le ticket de **{self.player_name}** est clôturé",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
@@ -455,7 +449,8 @@ class DiscordBot:
 
             # Send initial controls panel (claim stage)
             controls_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="🎛️ Controles Modérateur",
+                title="??? Controles Mod�rateur",
                 description=f"Ticket de **{player_name}** - en attente",
                 timestamp=now
             )
@@ -542,7 +537,7 @@ class DiscordBot:
             # Create new button message
             # Create new controls message
             button_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
+                title="??? Controles Mod�rateur",
                 description=f"Ticket de **{player_name}** - en attente",
                 color=discord.Color.blue()
             
