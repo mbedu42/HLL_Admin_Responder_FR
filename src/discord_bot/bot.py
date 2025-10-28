@@ -42,9 +42,13 @@ class CloseTicketView(discord.ui.View):
             if self.player_name in self.discord_bot.active_threads:
                 del self.discord_bot.active_threads[self.player_name]
                 
-            # Remove from active button messages (Discord bot)
-            if self.player_name in self.discord_bot.active_button_messages:
-                del self.discord_bot.active_button_messages[self.player_name]
+              # Remove from active button messages (Discord bot)
+              if self.player_name in self.discord_bot.active_button_messages:
+                  del self.discord_bot.active_button_messages[self.player_name]
+
+              # Clear claimed state for this player (so future tickets start fresh)
+              if self.player_name in self.discord_bot.claimed_by:
+                  del self.discord_bot.claimed_by[self.player_name]
             
             # FIXED: Also clean up CRCON client tracking
             self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
@@ -453,13 +457,22 @@ class DiscordBot:
             # Post the detailed embed without controls
             await thread.send(embed=embed)
 
-            # Send initial controls panel (claim stage)
-            controls_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
-                description=f"Ticket de **{player_name}** - en attente",
-                timestamp=now
-            )
-            view = ClaimTicketView(player_name, self)
+                        # Send initial controls panel (claim stage or already claimed)
+            claimer = self.claimed_by.get(player_name)
+            if claimer:
+                controls_embed = discord.Embed(
+                    title="🎛️ Statut du ticket",
+                    description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
+                    timestamp=now
+                )
+                view = CloseTicketView(player_name, self)
+            else:
+                controls_embed = discord.Embed(
+                    title="🎛️ Statut du ticket",
+                    description=f"Ticket de **{player_name}** - en attente",
+                    timestamp=now
+                )
+                view = ClaimTicketView(player_name, self)
             button_message = await thread.send(embed=controls_embed, view=view)
             self.active_button_messages[player_name] = button_message
             
@@ -540,13 +553,22 @@ class DiscordBot:
                     pass
             
             # Create new button message
-            # Create new controls message
-            button_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
-                description=f"Ticket de **{player_name}** - en attente",
-                color=discord.Color.blue()
-            )
-            view = ClaimTicketView(player_name, self)
+                        # Create new controls message (respect claimed state)
+            claimer = self.claimed_by.get(player_name)
+            if claimer:
+                button_embed = discord.Embed(
+                    title="🎛️ Statut du ticket",
+                    description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
+                    color=discord.Color.blue()
+                )
+                view = CloseTicketView(player_name, self)
+            else:
+                button_embed = discord.Embed(
+                    title="🎛️ Statut du ticket",
+                    description=f"Ticket de **{player_name}** - en attente",
+                    color=discord.Color.blue()
+                )
+                view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
             
@@ -615,3 +637,4 @@ class DiscordBot:
             print(f"❌ Failed to start Discord bot: {e}")
             logger.error(f"Failed to start Discord bot: {e}")
             raise
+
