@@ -14,7 +14,7 @@ Discord bot that automatically creates forum posts when players request admin he
 
 ## How It Works
 
-1. Player types `!admin` command in-game
+1. Player types `admin` command in-game
 2. Bot detects command via CRCON logs
 3. Creates Discord forum post with NEW tag
 4. Mentions admin roles (if configured)
@@ -150,9 +150,9 @@ tmux kill-session -t hll-admin
 ## Usage
 
 **Players type in-game:**
-- `!admin` - Request admin help
-- `!admin I need help with teamkilling` - Request with message
-- `!admin stuck in geometry` - Specific issue
+- `admin` - Request admin help
+- `admin I need help with teamkilling` - Request with message
+- `admin stuck in geometry` - Specific issue
 
 **Admin Workflow:**
 1. Bot creates Discord forum post

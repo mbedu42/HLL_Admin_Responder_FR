@@ -12,6 +12,8 @@ discord:
 crcon:
   base_url: ${CRCON_BASE_URL}
   api_token: ${CRCON_API_TOKEN}
+  poll_interval_seconds: 5
+  error_backoff_seconds: 10
 
 logging:
   level: "INFO"
