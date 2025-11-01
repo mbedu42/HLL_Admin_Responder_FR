@@ -251,13 +251,13 @@ class CRCONClient:
                         self.processed_log_ids.add(log_id)
                     
                     # Check if this is an !admin request
-                    if player_name and content and '!admin' in content.lower():
+                    if player_name and content and 'admin' in content.lower():
                         print(f"🚨 ADMIN REQUEST: {player_name} - {content}")
                         
                         # Extract admin message
                         admin_message = ""
-                        if '!admin' in content.lower():
-                            parts = content.lower().split('!admin')
+                        if 'admin' in content.lower():
+                            parts = content.lower().split('admin')
                             if len(parts) > 1:
                                 after_admin = parts[1].strip()
                                 after_admin = re.sub(r'\(76561\d+\)', '', after_admin).strip()
@@ -277,7 +277,7 @@ class CRCONClient:
                     # FIXED: Check both CRCON tracking AND Discord bot tracking
                     elif (player_name and content and 
                           (player_name in self.active_threads) and  # CRCON tracking
-                          not content.lower().startswith('!admin')):
+                          not content.lower().startswith('admin')):
                         
                         print(f"💬 PLAYER RESPONSE (tracked): {player_name} - {content}")
                         
@@ -289,7 +289,7 @@ class CRCONClient:
                                 print(f"❌ Failed to send player response to Discord: {callback_error}")
                     
                     # If player is not being tracked, just log it but don't send to Discord
-                    elif player_name and content and not content.lower().startswith('!admin'):
+                    elif player_name and content and not content.lower().startswith('admin'):
                         print(f"💬 Regular chat (not tracked): {player_name} - {content}")
                                 
 

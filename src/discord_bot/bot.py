@@ -97,7 +97,7 @@ class ClaimTicketView(discord.ui.View):
         try:
             claimed_embed = discord.Embed(
                 title="🎛️ Statut du ticket",
-                description=f"{interaction.user.display_name} has claimed the ticket.",
+                description=f"{interaction.user.display_name} s'est attribué le ticket.",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
             )
@@ -408,11 +408,23 @@ class DiscordBot:
                 print(f"❌ Channel {channel_id} is not a forum channel")
                 return
             
-            # Create forum post with date and time
+            # Create forum post with date/time and append player platform ID if available
             now = datetime.now()
             date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M")
-            post_name = f"{date_str} {time_str} - {player_name}"
+            id_suffix = ""
+            try:
+                players = await self.crcon_client.get_players()
+                for p in players:
+                    if p.get('name') == player_name:
+                        platform_id = p.get('player_id') or p.get('steam_id_64')
+                        if platform_id:
+                            id_suffix = f" ({platform_id})"
+                        break
+            except Exception:
+                # If we fail to fetch players, just omit the ID
+                pass
+            post_name = f"{date_str} {time_str} - {player_name}{id_suffix}"
             
             # Create initial message content with admin mentions
             admin_mentions = self.get_admin_mentions()
