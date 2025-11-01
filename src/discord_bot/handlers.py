@@ -65,7 +65,7 @@ class DiscordHandlers:
         self.rcon_client = rcon_client
 
     async def on_admin_command(self, message: Message):
-        if message.content.startswith('!admin'):
+        if message.content.startswith('admin'):
             thread = await message.channel.create_thread(name=f"Fil Admin - {message.author.name}", auto_archive_duration=60)
             await thread.send(f"Commande admin reçue de {message.author.name}. Merci de répondre ici.")
 

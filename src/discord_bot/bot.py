@@ -97,7 +97,7 @@ class ClaimTicketView(discord.ui.View):
         try:
             claimed_embed = discord.Embed(
                 title="🎛️ Statut du ticket",
-                description=f"{interaction.user.display_name} has claimed the ticket.",
+                description=f"{interaction.user.display_name} s'est attribué le ticket.",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
             )
