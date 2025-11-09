@@ -249,6 +249,21 @@ class CRCONClient:
                     # Mark as processed
                     if log_id:
                         self.processed_log_ids.add(log_id)
+
+                    # If player already has an active ticket and sends another 'admin' message,
+                    # treat it as a continuation in the same thread with a normalized text.
+                    if (player_name and content and 'admin' in content.lower() and 
+                        (player_name in self.active_threads)):
+                        normalized_message = "Player requested admin assistance"
+                        print(f" CONTINUATION: {player_name} sent another admin message; treating as response")
+                        if self.player_response_callback:
+                            try:
+                                await self.player_response_callback(player_name, normalized_message, event_time)
+                                print(f" Player response (normalized) sent to Discord thread!")
+                            except Exception as callback_error:
+                                print(f" Failed to send normalized player response to Discord: {callback_error}")
+                        # Skip standard admin request handling for this log entry
+                        continue
                     
                     # Check if this is an !admin request
                     if player_name and content and 'admin' in content.lower():
