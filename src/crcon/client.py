@@ -25,18 +25,14 @@ class CRCONClient:
         # Track active admin threads - player_name -> thread info
         self.active_threads: Dict[str, dict] = {}
         
-        # Initialize with current logs to avoid processing old ones
-        self.highest_log_id = 0
-        # For recent logs API: track last seen timestamp in ms
-        self.last_seen_timestamp_ms = 0
-        # For historical logs API: track last seen event_time (ISO string)
-        self.last_seen_event_time: Optional[str] = None
+        # WebSocket stream cursor/dedupe
+        self.ws_last_seen_id: Optional[str] = None
+        self.ws_seen_ids: Set[str] = set()
         
         logger.info(f"CRCON Config - URL: {self.base_url}")
         
-        # WebSocket stream support
-        self.use_websocket_stream = bool(self.config.get('crcon.use_websocket_stream', False))
-        self.ws_last_seen_id: Optional[str] = None
+        # WS-only mode: we do not poll HTTP logs anymore
+        self.use_websocket_stream = True
     
     async def create_session(self):
         """Create HTTP session"""
@@ -68,31 +64,8 @@ class CRCONClient:
             return False
     
     async def initialize_log_tracking(self):
-        """Initialize tracking using historical logs to avoid processing old ones (server-side)."""
-        try:
-            await self.create_session()
-            url = f'{self.base_url}/api/get_historical_logs'
-            payload = {
-                'action': 'CHAT',
-                'exact_action': False,
-                'time_sort': 'desc',
-                'limit': 1
-            }
-            async with self.session.post(url, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    logs = data.get('result', []) or []
-                    if logs:
-                        latest = logs[0]
-                        # Track last event time (ISO string) for server-side filtering
-                        self.last_seen_event_time = latest.get('event_time')
-                        print(f" Initialized historical log tracking. Starting from event_time: {self.last_seen_event_time}")
-                    else:
-                        print(f" No logs found during initialization")
-                else:
-                    logger.error(f"API init (historical logs) failed with status: {response.status}")
-        except Exception as e:
-            logger.error(f"Error initializing log tracking: {e}")
+        """Polling disabled. WS-only mode."""
+        logger.info("initialize_log_tracking called but polling is disabled (WS-only mode)")
     
     def register_admin_thread(self, player_name: str, thread_info: dict):
         """Register an active admin thread for a player"""
@@ -185,51 +158,9 @@ class CRCONClient:
             return []
     
     async def get_new_logs(self) -> list:
-        """Get NEW chat logs using historical logs API with server-side time filter."""
-        try:
-            await self.create_session()
-            url = f'{self.base_url}/api/get_historical_logs'
-            payload = {
-                'action': 'CHAT',
-                'exact_action': False,
-                'time_sort': 'asc',
-                'limit': 500
-            }
-            used_from = None
-            if self.last_seen_event_time:
-                try:
-                    base_dt = datetime.fromisoformat(self.last_seen_event_time)
-                    # Add a tiny delta to make the filter strictly greater-than
-                    advanced = base_dt + timedelta(milliseconds=1)
-                    used_from = advanced.isoformat()
-                except Exception:
-                    used_from = self.last_seen_event_time
-                payload['from_'] = used_from
-            async with self.session.post(url, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    logs = data.get('result', []) or []
-                    new_logs = []
-                    for log in logs:
-                        new_logs.append({
-                            'player1_name': log.get('player1_name'),
-                            'content': log.get('content', '') or log.get('raw', ''),
-                            'id': log.get('id') or 0,
-                            'event_time': log.get('event_time'),
-                            'type': log.get('type', ''),
-                        })
-                    if logs:
-                        last = logs[-1]
-                        self.last_seen_event_time = last.get('event_time') or self.last_seen_event_time
-                    fetched_from = used_from or 'startup'
-                    print(f" Server-side fetched {len(logs)} new historical logs since {fetched_from}")
-                    return new_logs
-                else:
-                    logger.error(f"Failed to get historical logs, status: {response.status}")
-                    return []
-        except Exception as e:
-            logger.error(f"Error getting historical logs: {e}")
-            return []
+        """Polling disabled. WS-only mode."""
+        logger.info("get_new_logs called but polling is disabled (WS-only mode)")
+        return []
     
     async def check_for_admin_requests(self):
         """Check for !admin requests AND player responses in threads"""
@@ -326,36 +257,26 @@ class CRCONClient:
         print(f" Player response callback set!")
     
     async def start_monitoring(self):
-        """Start monitoring for admin requests"""
+        """Start monitoring for admin requests (WebSocket-only)."""
         if not await self.test_connection():
             logger.error("Cannot start monitoring - failed to connect to CRCON API")
             return
-        
-        # If configured, try WebSocket streaming first
-        if self.use_websocket_stream:
-            try:
-                await self.monitor_via_websocket()
-                return
-            except Exception as e:
-                logger.error(f"WebSocket monitoring failed, falling back to polling: {e}")
-        
-        await self.initialize_log_tracking()
-        
+
         self.monitoring = True
-        print(f" Started monitoring for admin requests and player responses")
-        logger.info("Started monitoring for admin requests via CRCON API (polling)")
-        
-        # Polling configuration (defaults if not set)
-        poll_interval = int(self.config.get('crcon.poll_interval_seconds', 5))
-        error_backoff = int(self.config.get('crcon.error_backoff_seconds', 10))
-        
+        reconnect_delay = int(self.config.get('crcon.ws_reconnect_initial_seconds', 3))
+        max_delay = int(self.config.get('crcon.ws_reconnect_max_seconds', 30))
+        logger.info("Starting WebSocket log monitoring (WS-only)")
+
         while self.monitoring:
             try:
-                await self.check_for_admin_requests()
-                await asyncio.sleep(poll_interval)
+                await self.monitor_via_websocket()
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {e}")
-                await asyncio.sleep(error_backoff)
+                logger.error(f"WebSocket loop error: {e}")
+            if not self.monitoring:
+                break
+            logger.warning(f"WebSocket disconnected. Reconnecting in {reconnect_delay}s…")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, max_delay)
     
     def stop_monitoring(self):
         """Stop monitoring"""
@@ -363,24 +284,24 @@ class CRCONClient:
         logger.info("Stopped monitoring for admin requests")
 
     async def monitor_via_websocket(self):
-        """Monitor logs using CRCON WebSocket stream at /ws/logs"""
+        """Monitor logs using CRCON WebSocket stream at /ws/logs (WS-only)."""
         await self.create_session()
         ws_url = self.base_url.replace('http://', 'ws://').replace('https://', 'wss://')
         ws_url = ws_url.rstrip('/') + '/ws/logs'
 
         headers = {"Authorization": f"Bearer {self.api_token}"}
-        print(f" Connecting to WebSocket log stream: {ws_url}")
+        logger.info(f"Connecting to WebSocket log stream: {ws_url}")
 
-        async with self.session.ws_connect(ws_url, headers=headers) as ws:
-            init_payload = {
-                "last_seen_id": self.ws_last_seen_id,
-                "actions": ["CHAT"],
-            }
-            await ws.send_json(init_payload)
-            print(" WebSocket stream started (CHAT filter)")
+        try:
+            async with self.session.ws_connect(ws_url, headers=headers, heartbeat=30) as ws:
+                init_payload = {
+                    "last_seen_id": self.ws_last_seen_id,
+                    "actions": ["CHAT"],
+                }
+                await ws.send_json(init_payload)
+                logger.info("WebSocket stream started (CHAT filter)")
 
-            self.monitoring = True
-            try:
+                primed = False
                 while self.monitoring:
                     msg = await ws.receive()
                     if msg.type == aiohttp.WSMsgType.TEXT:
@@ -396,13 +317,34 @@ class CRCONClient:
                             continue
 
                         if data.get('error'):
-                            print(f" WebSocket error: {data.get('error')}")
-                            break
+                            logger.error(f"WebSocket server error: {data.get('error')}")
+                            # Keep the connection alive; wait briefly and continue
+                            await asyncio.sleep(1)
+                            continue
 
                         batch = data.get('logs') or []
-                        self.ws_last_seen_id = data.get('last_seen_id') or self.ws_last_seen_id
+                        last_seen = data.get('last_seen_id')
+
+                        # Prime the cursor to avoid replaying the tail
+                        if not primed and self.ws_last_seen_id is None:
+                            self.ws_last_seen_id = last_seen
+                            primed = True
+                            if batch:
+                                logger.info(f"Primed WS cursor at {self.ws_last_seen_id}; skipped initial {len(batch)} logs")
+                            continue
+
+                        if last_seen:
+                            self.ws_last_seen_id = last_seen
 
                         for entry in batch:
+                            sid = entry.get('id')
+                            if sid and sid in self.ws_seen_ids:
+                                continue
+                            if sid:
+                                self.ws_seen_ids.add(sid)
+                                if len(self.ws_seen_ids) > 5000:
+                                    self.ws_seen_ids.clear()
+
                             log = entry.get('log') or {}
                             action = log.get('action') or ''
                             if not str(action).startswith('CHAT'):
@@ -435,12 +377,18 @@ class CRCONClient:
                             except Exception as proc_err:
                                 logger.error(f"Error processing WS log line: {proc_err}")
 
-                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        print(f" WebSocket closed or error: {msg.type}")
+                    elif msg.type == aiohttp.WSMsgType.CLOSED:
+                        logger.warning("WebSocket closed by server")
                         break
-            finally:
-                self.monitoring = False
-                print(" WebSocket monitoring stopped")
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        logger.error("WebSocket error encountered")
+                        break
+        except aiohttp.WSServerHandshakeError as e:
+            logger.error(f"WebSocket handshake failed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"WebSocket connection error: {e}")
+            raise
 
 class ClaimTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
