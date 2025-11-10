@@ -45,18 +45,7 @@ class CloseTicketView(discord.ui.View):
                 self.discord_bot.status_messages[self.player_name] = [new_msg.id]
             except Exception:
                 pass
-            # Then delete it and re-post at the bottom so it appears last
-            try:
-                await interaction.message.delete()
-            except Exception:
-                pass
-            try:
-                new_msg = await interaction.message.channel.send(embed=closed_embed)
-                # Track the final status window id
-                self.discord_bot.current_status_message[self.player_name] = new_msg.id
-                self.discord_bot.status_messages[self.player_name] = [new_msg.id]
-            except Exception:
-                pass
+
             
             # Remove player from active tickets tracking (Discord bot)
             if self.player_name in self.discord_bot.player_tickets:
