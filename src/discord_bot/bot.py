@@ -26,13 +26,37 @@ class CloseTicketView(discord.ui.View):
             # Update the controls embed to show closed state in green and remove controls
             closed_embed = discord.Embed(
                 title="🎛️ Statut du ticket",
-                description=f"Le ticket de **{self.player_name}** est clôturé",
+                description=f"Le ticket de **{self.player_name}** est clôturé par **{interaction.user.display_name}**",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
             )
             # Disable the button and update embed on the message with the component
             self.clear_items()
             await interaction.response.edit_message(embed=closed_embed, view=None)
+            # Then delete it and re-post at the bottom so it appears last
+            try:
+                await interaction.message.delete()
+            except Exception:
+                pass
+            try:
+                new_msg = await interaction.message.channel.send(embed=closed_embed)
+                # Track the final status window id
+                self.discord_bot.current_status_message[self.player_name] = new_msg.id
+                self.discord_bot.status_messages[self.player_name] = [new_msg.id]
+            except Exception:
+                pass
+            # Then delete it and re-post at the bottom so it appears last
+            try:
+                await interaction.message.delete()
+            except Exception:
+                pass
+            try:
+                new_msg = await interaction.message.channel.send(embed=closed_embed)
+                # Track the final status window id
+                self.discord_bot.current_status_message[self.player_name] = new_msg.id
+                self.discord_bot.status_messages[self.player_name] = [new_msg.id]
+            except Exception:
+                pass
             
             # Remove player from active tickets tracking (Discord bot)
             if self.player_name in self.discord_bot.player_tickets:
@@ -113,19 +137,27 @@ class ClaimTicketView(discord.ui.View):
                     )
             except Exception:
                 pass
-            # Record claimer for future panels
+            # Record claimer for future panels and normalize status windows: keep only this message
             try:
                 self.discord_bot.claimed_by[self.player_name] = interaction.user.display_name
-                # Preserve this status message id and track it for future cleanup
+                msg_id = interaction.message.id
+                self.discord_bot.current_status_message[self.player_name] = msg_id
+                # Delete any other previous status messages
+                thread = interaction.message.channel
                 try:
-                    msg_id = interaction.message.id
-                    self.discord_bot.claim_status_message[self.player_name] = msg_id
-                    arr = self.discord_bot.status_messages.get(self.player_name, [])
-                    if msg_id not in arr:
-                        arr.append(msg_id)
-                    self.discord_bot.status_messages[self.player_name] = arr
+                    ids = self.discord_bot.status_messages.get(self.player_name, [])
+                    for mid in ids:
+                        if mid == msg_id:
+                            continue
+                        try:
+                            msg_obj = await thread.fetch_message(mid)
+                            await msg_obj.delete()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
+                # Reset tracking to only this one
+                self.discord_bot.status_messages[self.player_name] = [msg_id]
             except Exception:
                 pass
         except Exception:
@@ -213,6 +245,8 @@ class DiscordBot:
         self.status_messages: Dict[str, List[int]] = {}
         # Track the preserved claimed-status message id per player
         self.claim_status_message: Dict[str, int] = {}
+        # Track the current dynamic status message (latest) to delete before posting a new one
+        self.current_status_message: Dict[str, int] = {}
         
         # Forum tags (will be populated on startup)
         self.forum_tags = {
@@ -499,15 +533,9 @@ class DiscordBot:
                 view = ClaimTicketView(player_name, self)
             button_message = await thread.send(embed=controls_embed, view=view)
             self.active_button_messages[player_name] = button_message
-            # Track status message for cleanup; preserve if already claimed
-            try:
-                arr = self.status_messages.get(player_name, [])
-                arr.append(button_message.id)
-                self.status_messages[player_name] = arr
-                if player_name in self.claimed_by:
-                    self.claim_status_message[player_name] = button_message.id
-            except Exception:
-                pass
+            # This is the baseline status window; track only this one
+            self.current_status_message[player_name] = button_message.id
+            self.status_messages[player_name] = [button_message.id]
             
             print(f"Created admin request thread for {player_name}")
             
@@ -597,13 +625,7 @@ class DiscordBot:
             except Exception:
                 pass
 
-            # Move button to bottom
-            if player_name in self.active_button_messages:
-                try:
-                    old_message = self.active_button_messages[player_name]
-                    await old_message.edit(view=None)
-                except:
-                    pass
+            # Move button to bottom (no-op now; we edit the single status window)
             
             # Create new button message
                         # Create new controls message (respect claimed state)
@@ -622,15 +644,33 @@ class DiscordBot:
                     color=discord.Color.blue()
                 )
                 view = ClaimTicketView(player_name, self)
-            new_button_message = await thread.send(embed=button_embed, view=view)
-            self.active_button_messages[player_name] = new_button_message
-            # Track new status message for next cleanup
+            updated_msg = None
+            msg_id = self.current_status_message.get(player_name)
+            if msg_id:
+                try:
+                    existing = await thread.fetch_message(msg_id)
+                    await existing.edit(embed=button_embed, view=view)
+                    updated_msg = existing
+                except Exception:
+                    updated_msg = None
+            if updated_msg is None:
+                updated_msg = await thread.send(embed=button_embed, view=view)
+            self.active_button_messages[player_name] = updated_msg
+            self.current_status_message[player_name] = updated_msg.id
+            # Delete any other previous status windows and track only this one
             try:
-                arr = self.status_messages.get(player_name, [])
-                arr.append(new_button_message.id)
-                self.status_messages[player_name] = arr
+                ids = self.status_messages.get(player_name, [])
+                for mid in ids:
+                    if mid == updated_msg.id:
+                        continue
+                    try:
+                        msg_obj = await thread.fetch_message(mid)
+                        await msg_obj.delete()
+                    except Exception:
+                        pass
             except Exception:
                 pass
+            self.status_messages[player_name] = [updated_msg.id]
             
         except Exception as e:
             print(f"Error handling player response: {e}")
@@ -746,3 +786,4 @@ class DiscordBot:
             print(f"Failed to start Discord bot: {e}")
             logger.error(f"Failed to start Discord bot: {e}")
             raise
+
