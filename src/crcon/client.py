@@ -360,20 +360,17 @@ class CRCONClient:
                                 return re.sub(r'\(76561\d+\)', '', msg).strip()
 
                             try:
-                                if player_name and content and 'admin' in content.lower():
+                                # If a ticket already exists for this player, always forward the full message
+                                if player_name and content and (player_name in self.active_threads):
                                     full_msg = _clean_message(content)
-                                    if player_name in self.active_threads:
-                                        # Treat as a response in the same ticket, with the player's full message
-                                        if self.player_response_callback:
-                                            await self.player_response_callback(player_name, full_msg, event_time)
-                                    else:
-                                        # New admin request: use the full message
-                                        if self.message_callback:
-                                            await self.message_callback(player_name, full_msg)
-                                elif player_name and content and (player_name in self.active_threads):
-                                    if not content.lower().startswith('admin'):
-                                        if self.player_response_callback:
-                                            await self.player_response_callback(player_name, content, event_time)
+                                    if self.player_response_callback:
+                                        await self.player_response_callback(player_name, full_msg, event_time)
+                                # Otherwise, only create a new ticket when the message pings admin
+                                elif player_name and content and ('admin' in content.lower()):
+                                    full_msg = _clean_message(content)
+                                    if self.message_callback:
+                                        await self.message_callback(player_name, full_msg)
+                                # Else: ignore non-admin general chat when no ticket exists
                             except Exception as proc_err:
                                 logger.error(f"Error processing WS log line: {proc_err}")
 
