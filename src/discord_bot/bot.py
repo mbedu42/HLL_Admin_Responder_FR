@@ -532,7 +532,7 @@ class DiscordBot:
             try:
                 await self.crcon_client.send_message_to_player(
                     player_name,
-                    "Votre requête admin a bien été reçue ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
+                    "Votre ticket admin a bien été reçu ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
                 )
                 print(f"Sent confirmation to player: {player_name}")
             except Exception as msg_error:
