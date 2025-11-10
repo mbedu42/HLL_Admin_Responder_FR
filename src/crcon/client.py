@@ -29,6 +29,8 @@ class CRCONClient:
         self.highest_log_id = 0
         # For recent logs API: track last seen timestamp in ms
         self.last_seen_timestamp_ms = 0
+        # For historical logs API: track last seen event_time (ISO string)
+        self.last_seen_event_time: Optional[str] = None
         
         logger.info(f"CRCON Config - URL: {self.base_url}")
     
@@ -62,30 +64,29 @@ class CRCONClient:
             return False
     
     async def initialize_log_tracking(self):
-        """Initialize tracking using recent logs to avoid processing old ones"""
+        """Initialize tracking using historical logs to avoid processing old ones (server-side)."""
         try:
             await self.create_session()
-            url = f'{self.base_url}/api/get_recent_logs'
+            url = f'{self.base_url}/api/get_historical_logs'
             payload = {
-                'start': 0,
-                'end': 1000,
-                'filter_action': ['CHAT'],
+                'action': 'CHAT',
                 'exact_action': False,
-                'inclusive_filter': True
+                'time_sort': 'desc',
+                'limit': 1
             }
             async with self.session.post(url, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
-                    res = data.get('result', {}) or {}
-                    logs = res.get('logs', [])
+                    logs = data.get('result', []) or []
                     if logs:
-                        # Keep the highest timestamp to start after existing logs
-                        self.last_seen_timestamp_ms = max(l.get('timestamp_ms', 0) for l in logs)
-                        print(f" Initialized recent log tracking. Starting from ts_ms: {self.last_seen_timestamp_ms}")
+                        latest = logs[0]
+                        # Track last event time (ISO string) for server-side filtering
+                        self.last_seen_event_time = latest.get('event_time')
+                        print(f" Initialized historical log tracking. Starting from event_time: {self.last_seen_event_time}")
                     else:
                         print(f" No logs found during initialization")
                 else:
-                    logger.error(f"API init (recent logs) failed with status: {response.status}")
+                    logger.error(f"API init (historical logs) failed with status: {response.status}")
         except Exception as e:
             logger.error(f"Error initializing log tracking: {e}")
     
@@ -180,61 +181,41 @@ class CRCONClient:
             return []
     
     async def get_new_logs(self) -> list:
-        """Get NEW chat logs using recent logs API and last seen timestamp."""
+        """Get NEW chat logs using historical logs API with server-side time filter."""
         try:
             await self.create_session()
-            url = f'{self.base_url}/api/get_recent_logs'
-            # Use a small epsilon to exclude logs with the exact same timestamp
-            min_ts = (self.last_seen_timestamp_ms / 1000.0 + 0.001) if self.last_seen_timestamp_ms else None
+            url = f'{self.base_url}/api/get_historical_logs'
             payload = {
-                'start': 0,
-                'end': 100,
-                'filter_action': ['CHAT'],
+                'action': 'CHAT',
                 'exact_action': False,
-                'inclusive_filter': True
+                'time_sort': 'asc',
+                'limit': 500
             }
-            if min_ts:
-                payload['min_timestamp'] = float(min_ts)
+            if self.last_seen_event_time:
+                payload['from_'] = self.last_seen_event_time
             async with self.session.post(url, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
-                    res = data.get('result', {}) or {}
-                    logs = res.get('logs', [])
-                    if self.active_threads:
-                        print(f" Currently tracking responses for: {list(self.active_threads.keys())}")
-                    
-                    # Filter and normalize new logs strictly greater than last_seen_timestamp_ms
+                    logs = data.get('result', []) or []
                     new_logs = []
-                    new_highest_ts = self.last_seen_timestamp_ms
                     for log in logs:
-                        ts_ms = log.get('timestamp_ms', 0)
-                        action = log.get('action', '') or ''
-                        if not action.startswith('CHAT'):
-                            continue
-                        if ts_ms and ts_ms > self.last_seen_timestamp_ms:
-                            # Normalize shape to match downstream usage
-                            normalized = {
-                                'player1_name': log.get('player_name_1'),
-                                'content': log.get('message') or log.get('raw', ''),
-                                'id': ts_ms,  # surrogate id for logging; not persisted
-                                'event_time': log.get('event_time'),
-                                'type': action,
-                            }
-                            new_logs.append(normalized)
-                            if ts_ms > new_highest_ts:
-                                new_highest_ts = ts_ms
-                    
-                    if new_highest_ts > self.last_seen_timestamp_ms:
-                        self.last_seen_timestamp_ms = new_highest_ts
-                    
-                    fetched_from = f"{min_ts:.3f}s" if min_ts else "startup"
-                    print(f" Fetched {len(logs)} recent logs since {fetched_from} (new: {len(new_logs)})")
+                        new_logs.append({
+                            'player1_name': log.get('player1_name'),
+                            'content': log.get('content', '') or log.get('raw', ''),
+                            'id': log.get('id') or 0,
+                            'event_time': log.get('event_time'),
+                            'type': log.get('type', ''),
+                        })
+                    if logs:
+                        last = logs[-1]
+                        self.last_seen_event_time = last.get('event_time') or self.last_seen_event_time
+                    print(f" Server-side fetched {len(logs)} new historical logs since {self.last_seen_event_time}")
                     return new_logs
                 else:
-                    logger.error(f"Failed to get recent logs, status: {response.status}")
+                    logger.error(f"Failed to get historical logs, status: {response.status}")
                     return []
         except Exception as e:
-            logger.error(f"Error getting recent logs: {e}")
+            logger.error(f"Error getting historical logs: {e}")
             return []
     
     async def check_for_admin_requests(self):
