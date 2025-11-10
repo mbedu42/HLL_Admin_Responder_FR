@@ -33,6 +33,10 @@ class CRCONClient:
         self.last_seen_event_time: Optional[str] = None
         
         logger.info(f"CRCON Config - URL: {self.base_url}")
+        
+        # WebSocket stream support
+        self.use_websocket_stream = bool(self.config.get('crcon.use_websocket_stream', False))
+        self.ws_last_seen_id: Optional[str] = None
     
     async def create_session(self):
         """Create HTTP session"""
@@ -315,11 +319,19 @@ class CRCONClient:
             logger.error("Cannot start monitoring - failed to connect to CRCON API")
             return
         
+        # If configured, try WebSocket streaming first
+        if self.use_websocket_stream:
+            try:
+                await self.monitor_via_websocket()
+                return
+            except Exception as e:
+                logger.error(f"WebSocket monitoring failed, falling back to polling: {e}")
+        
         await self.initialize_log_tracking()
         
         self.monitoring = True
         print(f" Started monitoring for admin requests and player responses")
-        logger.info("Started monitoring for admin requests via CRCON API")
+        logger.info("Started monitoring for admin requests via CRCON API (polling)")
         
         # Polling configuration (defaults if not set)
         poll_interval = int(self.config.get('crcon.poll_interval_seconds', 5))
@@ -337,6 +349,86 @@ class CRCONClient:
         """Stop monitoring"""
         self.monitoring = False
         logger.info("Stopped monitoring for admin requests")
+
+    async def monitor_via_websocket(self):
+        """Monitor logs using CRCON WebSocket stream at /ws/logs"""
+        await self.create_session()
+        ws_url = self.base_url.replace('http://', 'ws://').replace('https://', 'wss://')
+        ws_url = ws_url.rstrip('/') + '/ws/logs'
+
+        headers = {"Authorization": f"Bearer {self.api_token}"}
+        print(f" Connecting to WebSocket log stream: {ws_url}")
+
+        async with self.session.ws_connect(ws_url, headers=headers) as ws:
+            init_payload = {
+                "last_seen_id": self.ws_last_seen_id,
+                "actions": ["CHAT"],
+            }
+            await ws.send_json(init_payload)
+            print(" WebSocket stream started (CHAT filter)")
+
+            self.monitoring = True
+            try:
+                while self.monitoring:
+                    msg = await ws.receive()
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                        except Exception:
+                            try:
+                                data = msg.json()
+                            except Exception:
+                                data = None
+
+                        if not isinstance(data, dict):
+                            continue
+
+                        if data.get('error'):
+                            print(f" WebSocket error: {data.get('error')}")
+                            break
+
+                        batch = data.get('logs') or []
+                        self.ws_last_seen_id = data.get('last_seen_id') or self.ws_last_seen_id
+
+                        for entry in batch:
+                            log = entry.get('log') or {}
+                            action = log.get('action') or ''
+                            if not str(action).startswith('CHAT'):
+                                continue
+                            player_name = log.get('player_name_1')
+                            content = log.get('message') or log.get('raw') or ''
+                            event_time = log.get('event_time')
+
+                            try:
+                                if player_name and content and 'admin' in content.lower():
+                                    if player_name in self.active_threads:
+                                        normalized_message = "Player requested admin assistance"
+                                        if self.player_response_callback:
+                                            await self.player_response_callback(player_name, normalized_message, event_time)
+                                    else:
+                                        admin_message = ""
+                                        parts = content.lower().split('admin')
+                                        if len(parts) > 1:
+                                            after_admin = parts[1].strip()
+                                            after_admin = re.sub(r'\(76561\d+\)', '', after_admin).strip()
+                                            admin_message = after_admin or "Player requested admin assistance"
+                                        else:
+                                            admin_message = "Player requested admin assistance"
+                                        if self.message_callback:
+                                            await self.message_callback(player_name, admin_message)
+                                elif player_name and content and (player_name in self.active_threads):
+                                    if not content.lower().startswith('admin'):
+                                        if self.player_response_callback:
+                                            await self.player_response_callback(player_name, content, event_time)
+                            except Exception as proc_err:
+                                logger.error(f"Error processing WS log line: {proc_err}")
+
+                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                        print(f" WebSocket closed or error: {msg.type}")
+                        break
+            finally:
+                self.monitoring = False
+                print(" WebSocket monitoring stopped")
 
 class ClaimTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
