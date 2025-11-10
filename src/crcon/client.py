@@ -27,6 +27,8 @@ class CRCONClient:
         
         # Initialize with current logs to avoid processing old ones
         self.highest_log_id = 0
+        # For recent logs API: track last seen timestamp in ms
+        self.last_seen_timestamp_ms = 0
         
         logger.info(f"CRCON Config - URL: {self.base_url}")
     
@@ -60,29 +62,30 @@ class CRCONClient:
             return False
     
     async def initialize_log_tracking(self):
-        """Initialize log tracking with current highest log ID"""
+        """Initialize tracking using recent logs to avoid processing old ones"""
         try:
             await self.create_session()
-            url = f'{self.base_url}/api/get_historical_logs'
-            params = {'limit': 10}
-            
-            async with self.session.get(url, params=params) as response:
+            url = f'{self.base_url}/api/get_recent_logs'
+            payload = {
+                'start': 0,
+                'end': 1000,
+                'filter_action': ['CHAT'],
+                'exact_action': False,
+                'inclusive_filter': True
+            }
+            async with self.session.post(url, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logs = data.get('result', [])
-                    
+                    res = data.get('result', {}) or {}
+                    logs = res.get('logs', [])
                     if logs:
-                        # Get the highest log ID to start tracking from
-                        self.highest_log_id = max(log.get('id', 0) for log in logs)
-                        print(f" Initialized log tracking. Starting from log ID: {self.highest_log_id}")
-                        
-                        # Mark existing admin requests as processed
-                        for log in logs:
-                            if log.get('id'):
-                                self.processed_log_ids.add(log.get('id'))
+                        # Keep the highest timestamp to start after existing logs
+                        self.last_seen_timestamp_ms = max(l.get('timestamp_ms', 0) for l in logs)
+                        print(f" Initialized recent log tracking. Starting from ts_ms: {self.last_seen_timestamp_ms}")
                     else:
                         print(f" No logs found during initialization")
-                        
+                else:
+                    logger.error(f"API init (recent logs) failed with status: {response.status}")
         except Exception as e:
             logger.error(f"Error initializing log tracking: {e}")
     
@@ -177,58 +180,59 @@ class CRCONClient:
             return []
     
     async def get_new_logs(self) -> list:
-        """Get NEW logs based on log ID"""
+        """Get NEW chat logs using recent logs API and last seen timestamp."""
         try:
             await self.create_session()
-            url = f'{self.base_url}/api/get_historical_logs'
-            
-            params = {
-                'limit': 50
+            url = f'{self.base_url}/api/get_recent_logs'
+            min_ts = self.last_seen_timestamp_ms / 1000 if self.last_seen_timestamp_ms else None
+            payload = {
+                'start': 0,
+                'end': 5000,
+                'filter_action': ['CHAT'],
+                'exact_action': False,
+                'inclusive_filter': True
             }
-            
-            async with self.session.get(url, params=params) as response:
+            if min_ts:
+                payload['min_timestamp'] = float(min_ts)
+            async with self.session.post(url, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logs = data.get('result', [])
-                    
-                    print(f" Checking {len(logs)} logs (tracking from ID {self.highest_log_id})")
+                    res = data.get('result', {}) or {}
+                    logs = res.get('logs', [])
                     if self.active_threads:
                         print(f" Currently tracking responses for: {list(self.active_threads.keys())}")
                     
-                    # Filter for NEW logs
+                    # Filter and normalize new logs strictly greater than last_seen_timestamp_ms
                     new_logs = []
-                    new_highest_id = self.highest_log_id
-                    
+                    new_highest_ts = self.last_seen_timestamp_ms
                     for log in logs:
-                        log_id = log.get('id')
-                        log_type = log.get('type', '')
-                        player_name = log.get('player1_name')
-                        content = log.get('content', '') or log.get('raw', '')
-                        
-                        # Track highest ID
-                        if log_id and log_id > new_highest_id:
-                            new_highest_id = log_id
-                        
-                        # Only process CHAT logs with higher IDs
-                        if ('CHAT' in log_type and 
-                            log_id and 
-                            log_id > self.highest_log_id and 
-                            log_id not in self.processed_log_ids):
-                            
-                            new_logs.append(log)
-                            print(f" NEW LOG: ID {log_id} - {player_name}: {content}")
+                        ts_ms = log.get('timestamp_ms', 0)
+                        action = log.get('action', '') or ''
+                        if not action.startswith('CHAT'):
+                            continue
+                        if ts_ms and ts_ms > self.last_seen_timestamp_ms:
+                            # Normalize shape to match downstream usage
+                            normalized = {
+                                'player1_name': log.get('player_name_1'),
+                                'content': log.get('message') or log.get('raw', ''),
+                                'id': ts_ms,  # surrogate id for logging; not persisted
+                                'event_time': log.get('event_time'),
+                                'type': action,
+                            }
+                            new_logs.append(normalized)
+                            if ts_ms > new_highest_ts:
+                                new_highest_ts = ts_ms
                     
-                    # Update our highest log ID
-                    if new_highest_id > self.highest_log_id:
-                        self.highest_log_id = new_highest_id
+                    if new_highest_ts > self.last_seen_timestamp_ms:
+                        self.last_seen_timestamp_ms = new_highest_ts
                     
+                    print(f" Checking {len(logs)} recent logs (new: {len(new_logs)}) from ts_ms {self.last_seen_timestamp_ms}")
                     return new_logs
-                    
                 else:
-                    logger.error(f"Failed to get logs, status: {response.status}")
+                    logger.error(f"Failed to get recent logs, status: {response.status}")
                     return []
         except Exception as e:
-            logger.error(f"Error getting logs: {e}")
+            logger.error(f"Error getting recent logs: {e}")
             return []
     
     async def check_for_admin_requests(self):
