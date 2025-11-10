@@ -195,8 +195,16 @@ class CRCONClient:
                 'time_sort': 'asc',
                 'limit': 500
             }
+            used_from = None
             if self.last_seen_event_time:
-                payload['from_'] = self.last_seen_event_time
+                try:
+                    base_dt = datetime.fromisoformat(self.last_seen_event_time)
+                    # Add a tiny delta to make the filter strictly greater-than
+                    advanced = base_dt + timedelta(milliseconds=1)
+                    used_from = advanced.isoformat()
+                except Exception:
+                    used_from = self.last_seen_event_time
+                payload['from_'] = used_from
             async with self.session.post(url, json=payload) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -213,7 +221,8 @@ class CRCONClient:
                     if logs:
                         last = logs[-1]
                         self.last_seen_event_time = last.get('event_time') or self.last_seen_event_time
-                    print(f" Server-side fetched {len(logs)} new historical logs since {self.last_seen_event_time}")
+                    fetched_from = used_from or 'startup'
+                    print(f" Server-side fetched {len(logs)} new historical logs since {fetched_from}")
                     return new_logs
                 else:
                     logger.error(f"Failed to get historical logs, status: {response.status}")
@@ -237,7 +246,10 @@ class CRCONClient:
                     log_id = log_entry.get('id')
                     event_time = log_entry.get('event_time')
                     
-                    # Mark as processed
+                    # Skip if we've already processed this exact log entry
+                    if log_id and (log_id in self.processed_log_ids):
+                        continue
+                    # Mark as processed now
                     if log_id:
                         self.processed_log_ids.add(log_id)
 
