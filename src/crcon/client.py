@@ -188,7 +188,7 @@ class CRCONClient:
             min_ts = (self.last_seen_timestamp_ms / 1000.0 + 0.001) if self.last_seen_timestamp_ms else None
             payload = {
                 'start': 0,
-                'end': 5000,
+                'end': 100,
                 'filter_action': ['CHAT'],
                 'exact_action': False,
                 'inclusive_filter': True
