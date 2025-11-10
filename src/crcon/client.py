@@ -299,7 +299,6 @@ class CRCONClient:
                 await ws.send_json(init_payload)
                 logger.info("WebSocket stream started (CHAT filter)")
 
-                primed = False
                 while self.monitoring:
                     msg = await ws.receive()
                     if msg.type == aiohttp.WSMsgType.TEXT:
@@ -323,14 +322,7 @@ class CRCONClient:
                         batch = data.get('logs') or []
                         last_seen = data.get('last_seen_id')
 
-                        # Prime the cursor to avoid replaying the tail
-                        if not primed and self.ws_last_seen_id is None:
-                            self.ws_last_seen_id = last_seen
-                            primed = True
-                            if batch:
-                                logger.info(f"Primed WS cursor at {self.ws_last_seen_id}; skipped initial {len(batch)} logs")
-                            continue
-
+                        # Always process the first batch; rely on ws_seen_ids to dedupe
                         if last_seen:
                             self.ws_last_seen_id = last_seen
 
