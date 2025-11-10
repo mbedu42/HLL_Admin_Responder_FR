@@ -116,6 +116,16 @@ class ClaimTicketView(discord.ui.View):
             # Record claimer for future panels
             try:
                 self.discord_bot.claimed_by[self.player_name] = interaction.user.display_name
+                # Preserve this status message id and track it for future cleanup
+                try:
+                    msg_id = interaction.message.id
+                    self.discord_bot.claim_status_message[self.player_name] = msg_id
+                    arr = self.discord_bot.status_messages.get(self.player_name, [])
+                    if msg_id not in arr:
+                        arr.append(msg_id)
+                    self.discord_bot.status_messages[self.player_name] = arr
+                except Exception:
+                    pass
             except Exception:
                 pass
         except Exception:
@@ -199,6 +209,10 @@ class DiscordBot:
         self.active_button_messages: Dict[str, discord.Message] = {}
         self.player_tickets: Dict[str, bool] = {}  # Track players with active tickets
         self.claimed_by: Dict[str, str] = {}  # Track who claimed a ticket
+        # Track status window messages per player so we can delete older ones
+        self.status_messages: Dict[str, List[int]] = {}
+        # Track the preserved claimed-status message id per player
+        self.claim_status_message: Dict[str, int] = {}
         
         # Forum tags (will be populated on startup)
         self.forum_tags = {
@@ -485,6 +499,15 @@ class DiscordBot:
                 view = ClaimTicketView(player_name, self)
             button_message = await thread.send(embed=controls_embed, view=view)
             self.active_button_messages[player_name] = button_message
+            # Track status message for cleanup; preserve if already claimed
+            try:
+                arr = self.status_messages.get(player_name, [])
+                arr.append(button_message.id)
+                self.status_messages[player_name] = arr
+                if player_name in self.claimed_by:
+                    self.claim_status_message[player_name] = button_message.id
+            except Exception:
+                pass
             
             print(f"Created admin request thread for {player_name}")
             
@@ -556,6 +579,24 @@ class DiscordBot:
             await thread.send(embed=response_embed)
             print(f"Player response posted to Discord forum")
             
+            # Before adding a new status window, remove previous ones except the preserved claimed-status
+            try:
+                preserved_id = self.claim_status_message.get(player_name)
+                ids = self.status_messages.get(player_name, [])
+                keep: List[int] = []
+                for mid in ids:
+                    if preserved_id and mid == preserved_id:
+                        keep.append(mid)
+                        continue
+                    try:
+                        msg_obj = await thread.fetch_message(mid)
+                        await msg_obj.delete()
+                    except Exception:
+                        pass
+                self.status_messages[player_name] = keep
+            except Exception:
+                pass
+
             # Move button to bottom
             if player_name in self.active_button_messages:
                 try:
@@ -583,6 +624,13 @@ class DiscordBot:
                 view = ClaimTicketView(player_name, self)
             new_button_message = await thread.send(embed=button_embed, view=view)
             self.active_button_messages[player_name] = new_button_message
+            # Track new status message for next cleanup
+            try:
+                arr = self.status_messages.get(player_name, [])
+                arr.append(new_button_message.id)
+                self.status_messages[player_name] = arr
+            except Exception:
+                pass
             
         except Exception as e:
             print(f"Error handling player response: {e}")
@@ -670,6 +718,14 @@ class DiscordBot:
                     view = CloseTicketView(player_name, self)
                     new_msg = await message.channel.send(embed=controls_embed, view=view)
                     self.active_button_messages[player_name] = new_msg
+                    # Preserve claimed status window and track it
+                    try:
+                        self.claim_status_message[player_name] = new_msg.id
+                        arr = self.status_messages.get(player_name, [])
+                        arr.append(new_msg.id)
+                        self.status_messages[player_name] = arr
+                    except Exception:
+                        pass
                 except Exception as panel_err:
                     print(f"? Failed to update claimed controls panel: {panel_err}")
         except Exception as e:
