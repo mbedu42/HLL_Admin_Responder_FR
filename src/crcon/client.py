@@ -353,31 +353,23 @@ class CRCONClient:
                             content = log.get('message') or log.get('raw') or ''
                             event_time = log.get('event_time')
 
-                            # Helper: extract text after the first 'admin' (case-insensitive)
-                            def _after_admin(msg: str) -> str:
+                            # Helper: clean trailing SteamID patterns but keep full message
+                            def _clean_message(msg: str) -> str:
                                 if not msg:
                                     return ""
-                                m = re.search(r'admin', msg, flags=re.IGNORECASE)
-                                if not m:
-                                    return ""
-                                tail = msg[m.end():].strip()
-                                # Remove appended SteamID like (76561...)
-                                tail = re.sub(r'\(76561\d+\)', '', tail).strip()
-                                return tail
+                                return re.sub(r'\(76561\d+\)', '', msg).strip()
 
                             try:
                                 if player_name and content and 'admin' in content.lower():
+                                    full_msg = _clean_message(content)
                                     if player_name in self.active_threads:
-                                        # Treat as a response in the same ticket, with the player's actual message
-                                        msg_after = _after_admin(content)
-                                        normalized_message = msg_after or "Player requested admin assistance"
+                                        # Treat as a response in the same ticket, with the player's full message
                                         if self.player_response_callback:
-                                            await self.player_response_callback(player_name, normalized_message, event_time)
+                                            await self.player_response_callback(player_name, full_msg, event_time)
                                     else:
-                                        # New admin request: use the player's message after the keyword if present
-                                        admin_message = _after_admin(content) or "Player requested admin assistance"
+                                        # New admin request: use the full message
                                         if self.message_callback:
-                                            await self.message_callback(player_name, admin_message)
+                                            await self.message_callback(player_name, full_msg)
                                 elif player_name and content and (player_name in self.active_threads):
                                     if not content.lower().startswith('admin'):
                                         if self.player_response_callback:
