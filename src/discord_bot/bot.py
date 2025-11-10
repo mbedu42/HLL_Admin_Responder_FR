@@ -508,7 +508,8 @@ class DiscordBot:
             print(f"Player response received: {player_name} - {message}")
             
             if player_name not in self.active_threads:
-                print(f"No active thread for player: {player_name}")
+                print(f"No active thread for {player_name}. Creating a new ticket with player's message…")
+                await self.handle_admin_request(player_name, message)
                 return
             
             thread = self.active_threads[player_name]
@@ -522,7 +523,7 @@ class DiscordBot:
                     raise discord.NotFound("Thread parent not found")
                     
             except (discord.NotFound, discord.Forbidden, AttributeError):
-                print(f"Thread for {player_name} was deleted, cleaning up tracking...")
+                print(f"Thread for {player_name} was deleted, cleaning up tracking and recreating ticket…")
                 # Clean up all tracking for this player
                 if player_name in self.player_tickets:
                     del self.player_tickets[player_name]
@@ -534,7 +535,8 @@ class DiscordBot:
                 # Clean up CRCON tracking
                 self.crcon_client.unregister_admin_thread(player_name)
                 
-                print(f"Cleaned up tracking for {player_name}, they can create new tickets now")
+                print(f"Recreating ticket for {player_name} with latest message…")
+                await self.handle_admin_request(player_name, message)
                 return
             
             # Apply NEW tag (player has responded, needs admin attention)
@@ -585,6 +587,21 @@ class DiscordBot:
         except Exception as e:
             print(f"Error handling player response: {e}")
             logger.error(f"Error handling player response: {e}")
+            # Fallback: if the thread/channel is gone, recreate a fresh ticket and post there
+            try:
+                if isinstance(e, discord.NotFound) or "Unknown Channel" in str(e):
+                    print(f"Fallback: recreating ticket for {player_name} due to missing channel/thread")
+                    # Cleanup stale tracking
+                    if player_name in self.player_tickets:
+                        del self.player_tickets[player_name]
+                    if player_name in self.active_threads:
+                        del self.active_threads[player_name]
+                    if player_name in self.active_button_messages:
+                        del self.active_button_messages[player_name]
+                    self.crcon_client.unregister_admin_thread(player_name)
+                    await self.handle_admin_request(player_name, message)
+            except Exception as fallback_err:
+                print(f"Fallback failed: {fallback_err}")
 
     async def handle_thread_message(self, message: discord.Message):
     #"""Handle messages in admin threads"""
