@@ -184,19 +184,17 @@ class CRCONClient:
                     if log_id:
                         self.processed_log_ids.add(log_id)
 
-                    # If player already has an active ticket and sends another 'admin' message,
-                    # treat it as a continuation in the same thread with a normalized text.
-                    if (player_name and content and 'admin' in content.lower() and 
-                        (player_name in self.active_threads)):
-                        normalized_message = "Player requested admin assistance"
-                        print(f" CONTINUATION: {player_name} sent another admin message; treating as response")
+                    # If player already has an active ticket, always forward full message as response
+                    if (player_name and content and (player_name in self.active_threads)):
+                        # Clean trailing SteamID but keep full message
+                        full_msg = re.sub(r'\(76561\d+\)', '', content).strip()
                         if self.player_response_callback:
                             try:
-                                await self.player_response_callback(player_name, normalized_message, event_time)
-                                print(f" Player response (normalized) sent to Discord thread!")
+                                await self.player_response_callback(player_name, full_msg, event_time)
+                                print(f" Player response sent to Discord thread!")
                             except Exception as callback_error:
-                                print(f" Failed to send normalized player response to Discord: {callback_error}")
-                        # Skip standard admin request handling for this log entry
+                                print(f" Failed to send player response to Discord: {callback_error}")
+                        # Skip admin-request handling for this log entry
                         continue
                     
                     # Check if this is an !admin request
