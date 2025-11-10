@@ -184,7 +184,8 @@ class CRCONClient:
         try:
             await self.create_session()
             url = f'{self.base_url}/api/get_recent_logs'
-            min_ts = self.last_seen_timestamp_ms / 1000 if self.last_seen_timestamp_ms else None
+            # Use a small epsilon to exclude logs with the exact same timestamp
+            min_ts = (self.last_seen_timestamp_ms / 1000.0 + 0.001) if self.last_seen_timestamp_ms else None
             payload = {
                 'start': 0,
                 'end': 5000,
@@ -226,7 +227,8 @@ class CRCONClient:
                     if new_highest_ts > self.last_seen_timestamp_ms:
                         self.last_seen_timestamp_ms = new_highest_ts
                     
-                    print(f" Checking {len(logs)} recent logs (new: {len(new_logs)}) from ts_ms {self.last_seen_timestamp_ms}")
+                    fetched_from = f"{min_ts:.3f}s" if min_ts else "startup"
+                    print(f" Fetched {len(logs)} recent logs since {fetched_from} (new: {len(new_logs)})")
                     return new_logs
                 else:
                     logger.error(f"Failed to get recent logs, status: {response.status}")
