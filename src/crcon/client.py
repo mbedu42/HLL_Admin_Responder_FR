@@ -146,7 +146,8 @@ class CRCONClient:
                         players.append({
                             'name': stat.get('player'),
                             'player_id': stat.get('player_id'),
-                            'steam_id_64': stat.get('player_id')
+                            'steam_id_64': stat.get('player_id'),
+                            'team': stat.get('side'),
                         })
                     
                     return players

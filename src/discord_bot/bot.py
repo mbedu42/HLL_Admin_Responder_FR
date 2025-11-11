@@ -449,11 +449,13 @@ class DiscordBot:
             date_str = now.strftime("%Y-%m-%d")
             time_str = now.strftime("%H:%M")
             id_suffix = ""
+            player_team = None
             try:
                 players = await self.crcon_client.get_players()
                 for p in players:
                     if p.get('name') == player_name:
                         platform_id = p.get('player_id') or p.get('steam_id_64')
+                        player_team = p.get('side')
                         if platform_id:
                             id_suffix = f" ({platform_id})"
                         break
@@ -496,11 +498,21 @@ class DiscordBot:
                 color=discord.Color.red(),
                 timestamp=now
             )
-            
-            embed.add_field(name="👤 Player", value=player_name, inline=True)
-            embed.add_field(name="🕐 Time", value=f"{date_str} {time_str}", inline=True)
+
+            # Add role mentions to the title to re-ping
+            role_title = f"Ping {admin_mentions}" if admin_mentions else "Ping MODO"
+            embed.title = f"🚨 {role_title} 🚨"
+
+            embed.add_field(name="👤 Joueur", value=player_name, inline=True)
+            embed.add_field(name="🕐 Heure", value=f"{date_str} {time_str}", inline=True)
             embed.add_field(name="💬 Message", value=admin_message or "No additional message", inline=False)
             
+            # Add player side if available
+            if player_team:
+                try:
+                    embed.add_field(name="⚑ Team", value=player_team, inline=True)
+                except Exception:
+                    pass
             # Post the detailed embed without controls
             await thread.send(embed=embed)
 
