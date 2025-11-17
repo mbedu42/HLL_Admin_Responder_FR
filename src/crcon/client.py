@@ -249,7 +249,9 @@ class CRCONClient:
                     continue
                         
         except Exception as e:
-            logger.error(f"Error checking admin requests: {e}")    def set_message_callback(self, callback: Callable):
+            logger.error(f"Error checking admin requests: {e}")
+
+    def set_message_callback(self, callback: Callable):
         """Set callback for admin requests"""
         self.message_callback = callback
         print(f" Admin request callback set!")
