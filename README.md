@@ -10,6 +10,7 @@ Discord bot that automatically creates forum posts when players request admin he
 - **Discord Forum Posts**: Auto-creates tickets with tagging (NEW/REPLIED/CLOSED)
 - **Two-way Chat**: Reply in Discord → message sent to player in-game
 - **Smart Prevention**: One ticket per player, prevents spam
+- **Auto Close**: Tickets close automatically after 90 minutes of inactivity
 - **Tmux Session**: Run in background with easy log access
 
 ## How It Works
@@ -120,6 +121,18 @@ DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
 CRCON_BASE_URL=http://your_crcon_host:port
 CRCON_API_TOKEN=your_crcon_api_token
 ```
+
+### Ticket Auto-Close Settings
+
+In `config/config.yaml` you can control the inactivity timer:
+
+```yaml
+tickets:
+  auto_close_minutes: 90        # minutes of silence before a ticket closes
+  inactivity_check_interval_seconds: 60
+```
+
+The defaults close tickets after 90 minutes without any chat from the player or admins. Lower the number if you want faster cleanup, or raise it for longer-running investigations.
 
 > [!IMPORTANT]
 > - Save changes with `Ctrl`+`O` (then press `ENTER`)

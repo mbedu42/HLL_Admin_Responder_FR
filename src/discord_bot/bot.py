@@ -1,8 +1,9 @@
-﻿import discord
+import asyncio
+import discord
 from discord.ext import commands
 import logging
 from typing import Dict, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class CloseTicketView(discord.ui.View):
         custom_id="close_ticket_button"
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        thread_ref = interaction.message.channel if isinstance(interaction.message.channel, discord.Thread) else None
         try:
             # Apply CLOSED tag to thread
             await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
@@ -63,8 +65,6 @@ class CloseTicketView(discord.ui.View):
             if self.player_name in self.discord_bot.claimed_by:
                 del self.discord_bot.claimed_by[self.player_name]
             
-            # FIXED: Also clean up CRCON client tracking
-            self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
 
             # Archive and lock the thread to match CRCON behavior
             try:
@@ -95,6 +95,12 @@ class CloseTicketView(discord.ui.View):
                 await interaction.response.send_message("Error closing ticket", ephemeral=True)
             except Exception:
                 pass
+        finally:
+            await self.discord_bot.finalize_ticket_close(
+                self.player_name,
+                thread_ref,
+                closed_by=interaction.user.display_name
+            )
 class ClaimTicketView(discord.ui.View):
     def __init__(self, player_name: str, discord_bot):
         super().__init__(timeout=None)
@@ -149,6 +155,8 @@ class ClaimTicketView(discord.ui.View):
                 self.discord_bot.status_messages[self.player_name] = [msg_id]
             except Exception:
                 pass
+            # Update last activity when an admin takes the ticket
+            self.discord_bot.last_activity[self.player_name] = datetime.utcnow()
         except Exception:
             try:
                 await interaction.response.send_message("Error claiming ticket", ephemeral=True)
@@ -162,6 +170,7 @@ class ClaimTicketView(discord.ui.View):
         custom_id="close_ticket_button"
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        thread_ref = interaction.message.channel if isinstance(interaction.message.channel, discord.Thread) else None
         try:
             # Apply CLOSED tag to thread
             await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
@@ -189,8 +198,6 @@ class ClaimTicketView(discord.ui.View):
             if self.player_name in self.discord_bot.active_button_messages:
                 del self.discord_bot.active_button_messages[self.player_name]
             
-            # FIXED: Also clean up CRCON client tracking
-            self.discord_bot.crcon_client.unregister_admin_thread(self.player_name)
 
             # Archive and lock the thread to match CRCON behavior
             try:
@@ -221,6 +228,12 @@ class ClaimTicketView(discord.ui.View):
                 await interaction.response.send_message(" Error closing ticket", ephemeral=True)
             except:
                 pass
+        finally:
+            await self.discord_bot.finalize_ticket_close(
+                self.player_name,
+                thread_ref,
+                closed_by=interaction.user.display_name
+            )
 
 class DiscordBot:
     def __init__(self, config, crcon_client):
@@ -236,6 +249,14 @@ class DiscordBot:
         self.claim_status_message: Dict[str, int] = {}
         # Track the current dynamic status message (latest) to delete before posting a new one
         self.current_status_message: Dict[str, int] = {}
+        # Track last activity timestamps for auto-closing logic
+        self.last_activity: Dict[str, datetime] = {}
+        # Auto-close configuration
+        self.auto_close_minutes = int(self.config.get('tickets.auto_close_minutes', 90))
+        self.inactivity_check_interval = int(
+            self.config.get('tickets.inactivity_check_interval_seconds', 60)
+        )
+        self.inactivity_task: Optional[asyncio.Task] = None
         
         # Forum tags (will be populated on startup)
         self.forum_tags = {
@@ -283,6 +304,10 @@ class DiscordBot:
             # Setup forum tags
             await self.setup_forum_tags()
             
+            # Launch inactivity monitor once the bot is ready
+            if not self.inactivity_task or self.inactivity_task.done():
+                self.inactivity_task = self.bot.loop.create_task(self.monitor_ticket_inactivity())
+            
         @self.bot.event
         async def on_message(message):
             if message.author == self.bot.user:
@@ -316,6 +341,10 @@ class DiscordBot:
                     del self.active_threads[player_name]
                 if player_name in self.active_button_messages:
                     del self.active_button_messages[player_name]
+                if player_name in self.last_activity:
+                    del self.last_activity[player_name]
+                if player_name in self.last_activity:
+                    del self.last_activity[player_name]
             
             await ctx.send(f"Cleaned up {cleaned} deleted ticket(s)")
     
@@ -388,6 +417,129 @@ class DiscordBot:
         except Exception as e:
             print(f" Error applying forum tag {tag_name}: {e}")
             logger.error(f"Error applying forum tag: {e}")
+
+    async def finalize_ticket_close(
+        self,
+        player_name: str,
+        thread: Optional[discord.Thread],
+        *,
+        notify_player_message: Optional[str] = None,
+        closed_by: Optional[str] = None,
+        closure_source: str = "manual"
+    ):
+        """Centralized cleanup routine when a ticket is closed."""
+        try:
+            target_thread = thread or self.active_threads.get(player_name)
+            if target_thread:
+                try:
+                    await self.apply_forum_tag(target_thread, 'CLOSED')
+                except Exception as tag_error:
+                    logger.error(f"Failed to apply CLOSED tag for {player_name}: {tag_error}")
+
+            # Remove tracking entries
+            self.player_tickets.pop(player_name, None)
+            self.active_threads.pop(player_name, None)
+            self.active_button_messages.pop(player_name, None)
+            self.status_messages.pop(player_name, None)
+            self.claim_status_message.pop(player_name, None)
+            self.current_status_message.pop(player_name, None)
+            self.claimed_by.pop(player_name, None)
+            self.last_activity.pop(player_name, None)
+
+            # Update CRCON tracking
+            try:
+                self.crcon_client.mark_ticket_closed(player_name)
+            except Exception as crcon_error:
+                logger.error(f"Failed to update CRCON tracking for {player_name}: {crcon_error}")
+
+            # Archive thread
+            if target_thread and isinstance(target_thread, discord.Thread):
+                try:
+                    await target_thread.edit(archived=True, locked=True)
+                except Exception as archive_error:
+                    logger.error(f"Failed to archive thread for {player_name}: {archive_error}")
+
+            # Notify player if required
+            if notify_player_message:
+                try:
+                    await self.crcon_client.send_message_to_player(player_name, notify_player_message)
+                except Exception as msg_error:
+                    print(f" Could not send close confirmation to {player_name}: {msg_error}")
+
+            if closed_by:
+                print(f" Ticket closed for {player_name} by {closed_by} ({closure_source})")
+            else:
+                print(f" Ticket closed for {player_name} ({closure_source})")
+
+        except Exception as e:
+            logger.error(f"Error finalizing ticket close for {player_name}: {e}")
+
+    async def monitor_ticket_inactivity(self):
+        """Background loop that closes inactive tickets."""
+        await self.bot.wait_until_ready()
+        inactivity_window = timedelta(minutes=self.auto_close_minutes)
+        while not self.bot.is_closed():
+            try:
+                now = datetime.utcnow()
+                active_players = list(self.player_tickets.keys())
+                for player_name in active_players:
+                    last = self.last_activity.get(player_name)
+                    if not last:
+                        self.last_activity[player_name] = now
+                        continue
+                    if now - last >= inactivity_window:
+                        await self._close_ticket_for_inactivity(player_name)
+            except asyncio.CancelledError:
+                break
+            except Exception as monitor_error:
+                logger.error(f"Inactivity monitor error: {monitor_error}")
+
+            await asyncio.sleep(self.inactivity_check_interval)
+
+    async def _close_ticket_for_inactivity(self, player_name: str):
+        """Close the player's ticket because it has been inactive too long."""
+        thread = self.active_threads.get(player_name)
+        if not thread:
+            self.last_activity.pop(player_name, None)
+            return
+
+        notice_embed = discord.Embed(
+            title="[AUTO] Ticket clos automatiquement",
+            description=(
+                f"Aucune activité détectée depuis {self.auto_close_minutes} minutes. "
+                "Ce ticket est maintenant fermé. Utilisez `!admin` pour rouvrir si nécessaire."
+            ),
+            color=discord.Color.dark_grey(),
+            timestamp=discord.utils.utcnow()
+        )
+        try:
+            await thread.send(embed=notice_embed)
+        except Exception as send_error:
+            logger.error(f"Failed to post inactivity notice for {player_name}: {send_error}")
+
+        status_embed = discord.Embed(
+            title="Statut du ticket",
+            description=f"Ticket de **{player_name}** fermé automatiquement pour inactivité.",
+            color=discord.Color.dark_grey(),
+            timestamp=discord.utils.utcnow()
+        )
+        status_message = self.active_button_messages.get(player_name)
+        if status_message:
+            try:
+                await status_message.edit(embed=status_embed, view=None)
+            except Exception as edit_error:
+                logger.error(f"Failed to update status message for {player_name}: {edit_error}")
+
+        notify_text = (
+            f"Votre ticket admin a été fermé automatiquement après {self.auto_close_minutes} minutes sans activité."
+        )
+        await self.finalize_ticket_close(
+            player_name,
+            thread,
+            notify_player_message=notify_text,
+            closed_by="Fermeture automatique",
+            closure_source="auto_inactivity"
+        )
     
     async def handle_admin_request(self, player_name: str, admin_message: str):
     #"""Handle new admin request from game"""
@@ -415,6 +567,7 @@ class DiscordBot:
                         
                         await thread.send(embed=embed)
                         print(f"Added player message to existing ticket: {player_name}")
+                        self.last_activity[player_name] = datetime.utcnow()
                         
                     except Exception as thread_error:
                         print(f"Could not add message to existing thread: {thread_error}")
@@ -537,6 +690,7 @@ class DiscordBot:
             # This is the baseline status window; track only this one
             self.current_status_message[player_name] = button_message.id
             self.status_messages[player_name] = [button_message.id]
+            self.last_activity[player_name] = datetime.utcnow()
             
             print(f"Created admin request thread for {player_name}")
             
@@ -672,6 +826,7 @@ class DiscordBot:
             except Exception:
                 pass
             self.status_messages[player_name] = [updated_msg.id]
+            self.last_activity[player_name] = datetime.utcnow()
             
         except Exception as e:
             print(f"Error handling player response: {e}")
@@ -734,6 +889,9 @@ class DiscordBot:
             except Exception as e:
                 print(f"Failed to send message to player {player_name}: {e}")
                 await message.add_reaction("❌")
+
+            # Track latest activity whenever an admin responds
+            self.last_activity[player_name] = datetime.utcnow()
             
             # Auto-claim on first admin reply if not already claimed
             if player_name not in self.claimed_by:

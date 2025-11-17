@@ -1,4 +1,4 @@
-﻿import aiohttp
+import aiohttp
 import asyncio
 import logging
 from typing import Optional, Callable, Set, Dict
@@ -24,6 +24,8 @@ class CRCONClient:
         
         # Track active admin threads - player_name -> thread info
         self.active_threads: Dict[str, dict] = {}
+        # Track players whose tickets were fully closed to avoid accidental reopenings
+        self.closed_tickets: Dict[str, datetime] = {}
         
         # WebSocket stream cursor/dedupe
         self.ws_last_seen_id: Optional[str] = None
@@ -69,6 +71,8 @@ class CRCONClient:
     
     def register_admin_thread(self, player_name: str, thread_info: dict):
         """Register an active admin thread for a player"""
+        # Opening a new ticket clears any previous closed flag
+        self.closed_tickets.pop(player_name, None)
         self.active_threads[player_name] = thread_info
         print(f" CRCON: Registered admin thread for {player_name}")
         print(f" CRCON: Currently tracking {len(self.active_threads)} players: {list(self.active_threads.keys())}")
@@ -81,6 +85,12 @@ class CRCONClient:
             print(f" CRCON: Now tracking {len(self.active_threads)} players: {list(self.active_threads.keys())}")
         else:
             print(f" CRCON: Tried to unregister {player_name} but they weren't tracked")
+
+    def mark_ticket_closed(self, player_name: str):
+        """Remember that a player's ticket has been closed until they explicitly call for admin again."""
+        self.closed_tickets[player_name] = datetime.utcnow()
+        # Ensure they're also removed from active tracking
+        self.unregister_admin_thread(player_name)
     
     async def send_message_to_player(self, player_name: str, message: str):
         """Send message to player via API"""
@@ -178,6 +188,9 @@ class CRCONClient:
                     log_id = log_entry.get('id')
                     event_time = log_entry.get('event_time')
                     
+                    if not player_name or not content:
+                        continue
+                    
                     # Skip if we've already processed this exact log entry
                     if log_id and (log_id in self.processed_log_ids):
                         continue
@@ -185,13 +198,14 @@ class CRCONClient:
                     if log_id:
                         self.processed_log_ids.add(log_id)
 
+                    cleaned_content = re.sub(r'\(76561\d+\)', '', content).strip()
+                    lowered = content.lower()
+
                     # If player already has an active ticket, always forward full message as response
-                    if (player_name and content and (player_name in self.active_threads)):
-                        # Clean trailing SteamID but keep full message
-                        full_msg = re.sub(r'\(76561\d+\)', '', content).strip()
+                    if player_name in self.active_threads:
                         if self.player_response_callback:
                             try:
-                                await self.player_response_callback(player_name, full_msg, event_time)
+                                await self.player_response_callback(player_name, cleaned_content, event_time)
                                 print(f" Player response sent to Discord thread!")
                             except Exception as callback_error:
                                 print(f" Failed to send player response to Discord: {callback_error}")
@@ -199,19 +213,20 @@ class CRCONClient:
                         continue
                     
                     # Check if this is an !admin request
-                    if player_name and content and 'admin' in content.lower():
-                        print(f"🚨 ADMIN REQUEST: {player_name} - {content}")                        
+                    if 'admin' in lowered:
+                        print(f"?? ADMIN REQUEST: {player_name} - {content}")                        
                         # Extract admin message
                         admin_message = ""
-                        if 'admin' in content.lower():
-                            parts = content.lower().split('admin')
-                            if len(parts) > 1:
-                                after_admin = parts[1].strip()
-                                after_admin = re.sub(r'\(76561\d+\)', '', after_admin).strip()
-                                admin_message = after_admin
+                        parts = lowered.split('admin')
+                        if len(parts) > 1:
+                            after_admin = parts[1].strip()
+                            admin_message = re.sub(r'\(76561\d+\)', '', after_admin).strip()
                         
                         if not admin_message:
                             admin_message = "Player requested admin assistance"
+
+                        # Player explicitly asked for help again, clear closed flag
+                        self.closed_tickets.pop(player_name, None)
                         
                         if self.message_callback:
                             try:
@@ -219,33 +234,22 @@ class CRCONClient:
                                 print(f" Admin request sent to Discord!")
                             except Exception as callback_error:
                                 print(f" Failed to send admin request to Discord: {callback_error}")
+                        continue
                     
-                    # Check if this is a response from a player with an active thread
-                    # FIXED: Check both CRCON tracking AND Discord bot tracking
-                    elif (player_name and content and 
-                          (player_name in self.active_threads) and  # CRCON tracking
-                          not content.lower().startswith('admin')):
-                        
-                        print(f" PLAYER RESPONSE (tracked): {player_name} - {content}")
-                        
-                        if self.player_response_callback:
-                            try:
-                                await self.player_response_callback(player_name, content, event_time)
-                                print(f" Player response sent to Discord thread!")
-                            except Exception as callback_error:
-                                print(f" Failed to send player response to Discord: {callback_error}")
+                    # Ignore regular chat from players whose tickets were recently closed
+                    if player_name in self.closed_tickets:
+                        print(f" Ignoring chat from {player_name} (ticket already closed)")
+                        continue
+
                     # If player is not being tracked, just log it but don't send to Discord
-                    elif player_name and content and not content.lower().startswith('admin'):
-                        print(f"💬 Regular chat (not tracked): {player_name} - {content}")
+                    print(f" Regular chat (not tracked): {player_name} - {content}")
 
                 except Exception as e:
                     logger.error(f"Error processing log entry: {e}")
                     continue
                         
         except Exception as e:
-            logger.error(f"Error checking admin requests: {e}")
-    
-    def set_message_callback(self, callback: Callable):
+            logger.error(f"Error checking admin requests: {e}")    def set_message_callback(self, callback: Callable):
         """Set callback for admin requests"""
         self.message_callback = callback
         print(f" Admin request callback set!")
@@ -351,16 +355,21 @@ class CRCONClient:
                                 return re.sub(r'\(76561\d+\)', '', msg).strip()
 
                             try:
+                                lowered = content.lower()
                                 # If a ticket already exists for this player, always forward the full message
                                 if player_name and content and (player_name in self.active_threads):
                                     full_msg = _clean_message(content)
                                     if self.player_response_callback:
                                         await self.player_response_callback(player_name, full_msg, event_time)
                                 # Otherwise, only create a new ticket when the message pings admin
-                                elif player_name and content and ('admin' in content.lower()):
+                                elif player_name and content and ('admin' in lowered):
                                     full_msg = _clean_message(content)
+                                    self.closed_tickets.pop(player_name, None)
                                     if self.message_callback:
                                         await self.message_callback(player_name, full_msg)
+                                # Ignore non-admin chat from recently closed tickets
+                                elif player_name and content and (player_name in self.closed_tickets):
+                                    logger.debug(f"Ignoring chat from {player_name} (ticket already closed)")
                                 # Else: ignore non-admin general chat when no ticket exists
                             except Exception as proc_err:
                                 logger.error(f"Error processing WS log line: {proc_err}")
@@ -393,7 +402,7 @@ class ClaimTicketView(discord.ui.View):
         try:
             # Build a light blue claimed embed
             claimed_embed = discord.Embed(
-                title="🎛️ Controles Modérateur",
+                title="??? Controles Modérateur",
                 description=f"{interaction.user.display_name} à pris en charge le ticket.",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
@@ -425,7 +434,7 @@ class CloseTicketView(discord.ui.View):
     @discord.ui.button(
         label="Fermer le ticket", 
         style=discord.ButtonStyle.danger, 
-        emoji="🔒",
+        emoji="??",
         custom_id="close_ticket_button"
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -472,7 +481,7 @@ class CloseTicketView(discord.ui.View):
             
             # Create confirmation embed as the interaction response (optional informational post)
             closed_embed = discord.Embed(
-                title="🔒 Ticket fermé",
+                title="?? Ticket fermé",
                 description=f"Le ticket de **{player_name}** a été clôturé par {interaction.user.mention}",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
@@ -481,7 +490,7 @@ class CloseTicketView(discord.ui.View):
 
             # Update the existing controls panel (the button message) to closed state in green
             controls_closed = discord.Embed(
-                title="🎛️ Controles Modérateur",
+                title="??? Controles Modérateur",
                 description=f"Le ticket de **{player_name}** est clôturé",
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow()
@@ -586,7 +595,7 @@ class DiscordBot:
                     print(f"Found existing tag: {tag_name}")
                 else:
                     # Create the tag
-                    emoji_map = {'NEW': '🆕', 'REPLIED': '💬', 'CLOSED': '🔒'}
+                    emoji_map = {'NEW': '??', 'REPLIED': '??', 'CLOSED': '??'}
                     color_map = {'NEW': discord.Color.red(), 'REPLIED': discord.Color.orange(), 'CLOSED': discord.Color.green()}
                     
                     try:
@@ -653,7 +662,7 @@ class DiscordBot:
             
             # Create initial embed
             embed = discord.Embed(
-                title="🚨 Besoin d'un modérateur",
+                title="?? Besoin d'un modérateur",
                 description=f"**Joueur:** {player_name}\n**Message:** {admin_message}",
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow()
@@ -677,7 +686,7 @@ class DiscordBot:
             # Add close button
             view = ClaimTicketView(player_name, self)
             button_message = await thread.send(embed=discord.Embed(
-                title="🎛️ Controles modérateurs ",
+                title="??? Controles modérateurs ",
                 description=f"Ticket de **{player_name}** — en attente",
                 color=discord.Color.blue()
             ), view=view)
@@ -726,7 +735,7 @@ class DiscordBot:
             
             # Create embed for player response
             response_embed = discord.Embed(
-                title="💬 Réponse du joueur",
+                title="?? Réponse du joueur",
                 description=f"**{player_name}:** {message}",
                 color=discord.Color.blue(),
                 timestamp=discord.utils.utcnow()
@@ -748,7 +757,7 @@ class DiscordBot:
             
             # Create new button message
             button_embed = discord.Embed(
-                title="🎛️ Controles modérateurs",
+                title="??? Controles modérateurs",
                 description=f"Ticket de **{player_name}** — en attente",
                 color=discord.Color.blue()
             )
@@ -806,3 +815,5 @@ class DiscordBot:
             await self.bot.start(token)
         except Exception as e:
             logger.error(f"Failed to start Discord bot: {e}")
+
+

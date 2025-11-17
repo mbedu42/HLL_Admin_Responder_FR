@@ -9,6 +9,10 @@ discord:
   admin_channel_id: ${DISCORD_ADMIN_CHANNEL_ID}
   admin_roles: ${DISCORD_ADMIN_ROLES}
 
+tickets:
+  auto_close_minutes: 90
+  inactivity_check_interval_seconds: 60
+
 crcon:
   base_url: ${CRCON_BASE_URL}
   api_token: ${CRCON_API_TOKEN}
