@@ -11,7 +11,7 @@ Discord bot that automatically creates forum posts when players request admin he
 - **Two-way Chat**: Reply in Discord → message sent to player in-game
 - **Smart Prevention**: One ticket per player, prevents spam
 - **Auto Close**: Tickets close automatically after 90 minutes of inactivity
-- **Tmux Session**: Run in background with easy log access
+- **Background Service**: Run with systemd or tmux
 
 ## How It Works
 
@@ -138,26 +138,101 @@ The defaults close tickets after 90 minutes without any chat from the player or 
 > - Save changes with `Ctrl`+`O` (then press `ENTER`)
 > - Exit nano with `Ctrl`+`X`
 
-## Bot Management with Tmux
+## Bot Management
 
-The bot runs in a tmux session for easy management:
+Use **one launch method only**. Do not run `python run.py`, `python main.py`, or
+start a tmux copy while the systemd service is active; doing so creates duplicate
+Discord notifications.
+
+### Identify the Launch Method
+
+Run these commands from any directory:
 
 ```bash
-# View bot logs (attach to session)
-tmux attach -t hll-admin
+# This VPS normally uses systemd. "active" means use the systemd commands below.
+systemctl is-active hll-admin
 
-# Detach from session (keep bot running)
-# Press: Ctrl+B then D
+# Only check tmux when the systemd command reports "inactive" or "unknown".
+tmux -L hll list-sessions
+```
 
-# Check if bot is running
-tmux list-sessions
+An empty tmux session list is normal when systemd is running the bot.
 
-# Restart the bot
-tmux kill-session -t hll-admin
-tmux new-session -d -s hll-admin -c "$(pwd)" "source venv/bin/activate && python run.py"
+### Systemd (Current VPS)
 
-# Stop the bot completely
-tmux kill-session -t hll-admin
+These are the commands to use on the current VPS:
+
+```bash
+# Status
+systemctl status hll-admin --no-pager
+
+# Show the latest 100 log lines
+journalctl -u hll-admin -n 100 --no-pager
+
+# Follow logs live (Ctrl+C exits the log view without stopping the bot)
+journalctl -u hll-admin -f
+
+# Restart after a configuration or code change
+sudo systemctl restart hll-admin
+
+# Stop and start
+sudo systemctl stop hll-admin
+sudo systemctl start hll-admin
+```
+
+To update the code and restart cleanly:
+
+```bash
+cd ~/HLL_Admin_Responder_FR
+sudo systemctl stop hll-admin
+git pull --ff-only
+source venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl start hll-admin
+systemctl status hll-admin --no-pager
+```
+
+### Tmux (Alternative Only)
+
+Use this section only on an installation without an active systemd service.
+`start.py --detached` uses the tmux socket named `hll`:
+
+```bash
+cd ~/HLL_Admin_Responder_FR
+
+# Start or restart in the background
+venv/bin/python start.py --detached
+
+# Check status
+tmux -L hll list-sessions
+
+# View the bot console
+tmux -L hll attach -t hll-admin
+
+# Detach without stopping: press Ctrl+B, then D
+
+# Stop
+tmux -L hll kill-session -t hll-admin
+
+# Follow the persistent log
+tail -f logs/tmux-hll-admin.log
+```
+
+### Check for Duplicate Bots
+
+The normal systemd process tree includes the `start.py` and `run.py` wrappers,
+but there must be only one `main.py` bot process:
+
+```bash
+pgrep -af '[p]ython.*main\.py'
+```
+
+If this prints more than one line, restart the managed service instead of
+starting another copy:
+
+```bash
+sudo systemctl restart hll-admin
+pgrep -af '[p]ython.*main\.py'
 ```
 
 ## Usage
@@ -192,52 +267,31 @@ pip install -r requirements.txt
 cp .env.example .env
 nano .env
 
-# Start in tmux session
-tmux new-session -d -s hll-admin "source venv/bin/activate && python run.py"
+# Start in a managed tmux session
+venv/bin/python start.py --detached
 ```
 
-## Tmux Quick Reference
-
-```bash
-# Attach to bot session
-tmux attach -t hll-admin
-
-# Detach from session (keep running)
-Ctrl+B then D
-
-# Scroll up in tmux (view logs)
-Ctrl+B then [
-# Use arrow keys to scroll, press Q to exit scroll mode
-
-# Kill session (stop bot)
-tmux kill-session -t hll-admin
-
-# List all sessions
-tmux list-sessions
-
-# Create new session
-tmux new-session -s session-name
-```
+Use the commands in **Bot Management > Tmux (Alternative Only)** afterward.
 
 ## Troubleshooting
 
-**Check if bot is running:**
+**Check the current VPS:**
 ```bash
-tmux list-sessions
+systemctl status hll-admin --no-pager
+journalctl -u hll-admin -n 100 --no-pager
+pgrep -af '[p]ython.*main\.py'
 ```
 
-**View bot logs:**
+**Restart the current VPS bot:**
 ```bash
-tmux attach -t hll-admin
+sudo systemctl restart hll-admin
+systemctl status hll-admin --no-pager
 ```
 
-**Bot crashed or not responding:**
+**The service is inactive:**
 ```bash
-# Restart the bot
-tmux kill-session -t hll-admin
-cd HLL_Admin_Responder
-source venv/bin/activate
-tmux new-session -d -s hll-admin "python run.py"
+sudo systemctl start hll-admin
+journalctl -u hll-admin -n 100 --no-pager
 ```
 
 **CRCON connection issues:**

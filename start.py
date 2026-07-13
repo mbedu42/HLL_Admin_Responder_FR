@@ -58,29 +58,31 @@ def tmux(cmd: str, socket: str):
 
 def iter_bot_pids(dir_path: Path):
     """
-    Return PIDs of python run.py processes belonging to this project.
-    Uses pgrep + /proc/<pid>/cwd so it sees all of them, detached or not.
+    Return PIDs of bot processes belonging to this project.
+
+    Check /proc directly so launches through start.py, run.py, or a manual
+    ``python main.py`` from src are all found, including detached processes.
     """
-    out = sh("pgrep -af 'python.*run.py'", capture=True, check=False)
-    if not out:
-        return
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
+    project_cwds = {dir_path, dir_path / "src"}
+    entrypoints = {"start.py", "run.py", "main.py"}
+
+    for proc_dir in Path("/proc").iterdir():
+        if not proc_dir.name.isdigit():
             continue
-        parts = line.split(None, 1)
-        if not parts[0].isdigit():
-            continue
-        pid = int(parts[0])
+        pid = int(proc_dir.name)
         if pid == os.getpid():
             continue
-        # verify cwd matches project or cmdline contains project path
-        cwd = None
+
         try:
-            cwd = Path(f"/proc/{pid}/cwd").resolve()
-        except FileNotFoundError:
+            cwd = (proc_dir / "cwd").resolve(strict=True)
+            argv = (proc_dir / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
-        if cwd == dir_path or str(dir_path) in line:
+
+        if cwd not in project_cwds:
+            continue
+        script_names = {Path(arg.decode(errors="replace")).name for arg in argv if arg}
+        if script_names & entrypoints:
             yield pid
 
 def kill_existing_instances(dir_path: Path, session: str, socket: str):
@@ -180,6 +182,11 @@ def main():
     ap.add_argument("-d", "--detached", action="store_true", help="run in background via tmux")
     ap.add_argument("--dir", default=str(Path.home() / "HLL_Admin_Responder_FR"))
     ap.add_argument("--branch", default="main")
+    ap.add_argument(
+        "--update",
+        action="store_true",
+        help="fetch and reset to origin/--branch before starting",
+    )
     ap.add_argument("--session", default="hll-admin")
     ap.add_argument("--socket", default="hll")
     args = ap.parse_args()
@@ -189,9 +196,10 @@ def main():
         die(f"dir not found: {dir_path}")
 
     log(f"dir: {dir_path}")
-    log(f"branch: {args.branch}")
 
-    git_update(dir_path, args.branch)
+    if args.update:
+        log(f"updating from branch: {args.branch}")
+        git_update(dir_path, args.branch)
     check_env(dir_path)
     venv_py = ensure_venv(dir_path)
     preflight_compile(dir_path, venv_py)

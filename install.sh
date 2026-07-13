@@ -40,19 +40,17 @@ echo "✅ Installation complete!"
 echo ""
 echo "🚀 Starting bot in tmux session..."
 
-# Kill existing session if it exists
-tmux kill-session -t hll-admin 2>/dev/null || true
-
-# Start new tmux session with the bot
-tmux new-session -d -s hll-admin -c "$PWD" "source venv/bin/activate && python run.py"
+# Start through the shared launcher so cleanup and tmux socket naming stay
+# consistent with the documented management commands.
+venv/bin/python start.py --detached
 
 echo "✅ Bot started in tmux session 'hll-admin'"
 echo ""
 echo "Commands to manage the bot:"
-echo "  📺 View bot logs: tmux attach -t hll-admin"
+echo "  📺 View bot logs: tmux -L hll attach -t hll-admin"
 echo "  🔌 Detach from session: Ctrl+B then D"
-echo "  🔄 Restart bot: tmux kill-session -t hll-admin && tmux new-session -d -s hll-admin -c '$PWD' 'source venv/bin/activate && python run.py'"
-echo "  🛑 Stop bot: tmux kill-session -t hll-admin"
-echo "  📋 List sessions: tmux list-sessions"
+echo "  🔄 Restart bot: venv/bin/python start.py --detached"
+echo "  🛑 Stop bot: tmux -L hll kill-session -t hll-admin"
+echo "  📋 List sessions: tmux -L hll list-sessions"
 echo ""
-echo "🎯 The bot is now running! Use 'tmux attach -t hll-admin' to view logs."
+echo "🎯 The bot is now running! Use 'tmux -L hll attach -t hll-admin' to view logs."
