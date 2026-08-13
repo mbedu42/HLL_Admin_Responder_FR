@@ -51,6 +51,8 @@ def check_env(dir_path: Path):
     text = envfile.read_text()
     if "DISCORD_TOKEN=" not in text:
         die("DISCORD_TOKEN missing in .env")
+    if "GAME_SERVERS=" not in text:
+        die("GAME_SERVERS missing in .env")
     return True
 
 def tmux(cmd: str, socket: str):
