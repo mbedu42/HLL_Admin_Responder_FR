@@ -1,23 +1,17 @@
-rcon:
-  host: ${RCON_HOST}
-  port: ${RCON_PORT}
-  password: ${RCON_PASSWORD}
-
 discord:
   token: ${DISCORD_TOKEN}
   guild_id: ${DISCORD_GUILD_ID}
-  admin_channel_id: ${DISCORD_ADMIN_CHANNEL_ID}
   admin_roles: ${DISCORD_ADMIN_ROLES}
+
+# The dynamic server list lives in the GAME_SERVERS JSON array in .env.
 
 tickets:
   auto_close_minutes: 90
   inactivity_check_interval_seconds: 60
 
 crcon:
-  base_url: ${CRCON_BASE_URL}
-  api_token: ${CRCON_API_TOKEN}
-  poll_interval_seconds: 5
-  error_backoff_seconds: 10
+  ws_reconnect_initial_seconds: 3
+  ws_reconnect_max_seconds: 30
 
 logging:
   level: "INFO"

@@ -1,5 +1,7 @@
+import asyncio
 import json
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from crcon.client import CRCONClient
 
@@ -42,6 +44,79 @@ class FakeSession:
 
 
 class CRCONPlayerIdTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_valid_stream_payload_reports_initial_health_once(self):
+        client = CRCONClient(FakeConfig(), SERVER)
+        events = []
+
+        async def on_health(event):
+            events.append(event)
+
+        client.set_health_callback(on_health)
+        await client.report_recovery()
+        await client.report_recovery()
+
+        self.assertEqual([event["status"] for event in events], ["healthy"])
+
+    async def test_monitor_reconnects_after_a_websocket_disconnect(self):
+        client = CRCONClient(FakeConfig(), SERVER)
+        client.test_connection = AsyncMock(return_value=True)
+        connection_attempts = 0
+
+        async def monitor_once():
+            nonlocal connection_attempts
+            connection_attempts += 1
+            if connection_attempts == 1:
+                return
+            raise asyncio.CancelledError
+
+        client.monitor_via_websocket = monitor_once
+        with patch("crcon.client.asyncio.sleep", new=AsyncMock()) as sleep:
+            with self.assertRaises(asyncio.CancelledError):
+                await client.start_monitoring()
+
+        self.assertEqual(connection_attempts, 2)
+        sleep.assert_awaited_once_with(3)
+
+    async def test_health_events_are_deduplicated_updated_and_recovered(self):
+        client = CRCONClient(FakeConfig(), SERVER)
+        events = []
+
+        async def on_health(event):
+            events.append(event)
+
+        client.set_health_callback(on_health)
+
+        await client.report_outage(
+            "CRCON API",
+            "Status endpoint unavailable",
+            "GET /api/get_status returned HTTP 502",
+        )
+        await client.report_outage(
+            "CRCON API",
+            "Status endpoint unavailable",
+            "GET /api/get_status returned HTTP 502",
+        )
+        self.assertEqual([event["status"] for event in events], ["outage"])
+
+        await client.report_outage(
+            "CRCON log stream",
+            "CRCON rejected log streaming",
+            "Log stream is not enabled in your config",
+        )
+        self.assertEqual(
+            [event["status"] for event in events], ["outage", "update"]
+        )
+        self.assertEqual(events[-1]["failure_count"], 3)
+
+        await client.report_recovery()
+        await client.report_recovery()
+        self.assertEqual(
+            [event["status"] for event in events],
+            ["outage", "update", "recovered"],
+        )
+        self.assertEqual(events[-1]["failure_count"], 3)
+        self.assertEqual(events[-1]["server_id"], "vietnam")
+
     async def test_routes_logs_and_ticket_state_by_player_id(self):
         client = CRCONClient(FakeConfig(), SERVER)
         admin_requests = []

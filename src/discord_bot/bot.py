@@ -1,948 +1,942 @@
 import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+from functools import partial
+from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
 import discord
 from discord.ext import commands
-import logging
-from typing import Dict, Optional, List
-from datetime import datetime, timedelta
+
 
 logger = logging.getLogger(__name__)
+TicketKey = Tuple[str, str]  # (server_id, player_id)
+PARIS_TIMEZONE = ZoneInfo("Europe/Paris")
+DISPLAY_DATETIME_FORMAT = "%Y-%m-%d %H:%M"
+
+
+def format_paris_datetime(value) -> str:
+    """Format a UTC datetime value for Discord in Paris local time."""
+    parsed_value = value
+
+    if isinstance(value, str):
+        stripped_value = value.strip()
+        try:
+            parsed_value = datetime.fromisoformat(
+                stripped_value.replace("Z", "+00:00")
+            )
+        except ValueError:
+            return value
+    elif isinstance(value, (int, float)):
+        parsed_value = datetime.fromtimestamp(value, tz=timezone.utc)
+
+    if not isinstance(parsed_value, datetime):
+        return str(value)
+    if parsed_value.tzinfo is None:
+        # CRCON currently serializes its UTC event_time without an offset.
+        parsed_value = parsed_value.replace(tzinfo=timezone.utc)
+
+    return parsed_value.astimezone(PARIS_TIMEZONE).strftime(
+        DISPLAY_DATETIME_FORMAT
+    )
+
 
 class CloseTicketView(discord.ui.View):
-    def __init__(self, player_name: str, discord_bot):
+    def __init__(self, ticket_key: TicketKey, discord_bot):
         super().__init__(timeout=None)
-        self.player_name = player_name
+        self.ticket_key = ticket_key
         self.discord_bot = discord_bot
 
     @discord.ui.button(
-        label="Fermer le ticket", 
-        style=discord.ButtonStyle.danger, 
+        label="Fermer le ticket",
+        style=discord.ButtonStyle.danger,
         emoji="🔒",
-        custom_id="close_ticket_button"
+        custom_id="close_ticket_button",
     )
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        thread_ref = interaction.message.channel if isinstance(interaction.message.channel, discord.Thread) else None
-        try:
-            # Apply CLOSED tag to thread
-            await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
-            
-            # Update the controls embed to show closed state in green and remove controls
-            closed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
-                description=f"Le ticket de **{self.player_name}** est clôturé par **{interaction.user.display_name}**",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow()
-            )
-            # Disable the button and update embed on the message with the component
-            self.clear_items()
-            await interaction.response.edit_message(embed=closed_embed, view=None)
-            # Then delete it and re-post at the bottom so it appears last
-            try:
-                await interaction.message.delete()
-            except Exception:
-                pass
-            try:
-                new_msg = await interaction.message.channel.send(embed=closed_embed)
-                # Track the final status window id
-                self.discord_bot.current_status_message[self.player_name] = new_msg.id
-                self.discord_bot.status_messages[self.player_name] = [new_msg.id]
-            except Exception:
-                pass
+    async def close_ticket(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await self.discord_bot.close_ticket_from_interaction(
+            self.ticket_key, interaction, self
+        )
 
-            
-            # Remove player from active tickets tracking (Discord bot)
-            if self.player_name in self.discord_bot.player_tickets:
-                del self.discord_bot.player_tickets[self.player_name]
-            
-            # Remove from active threads (Discord bot)
-            if self.player_name in self.discord_bot.active_threads:
-                del self.discord_bot.active_threads[self.player_name]
-                
-            # Remove from active button messages (Discord bot)
-            if self.player_name in self.discord_bot.active_button_messages:
-                del self.discord_bot.active_button_messages[self.player_name]
 
-            # Clear claimed state for this player (so future tickets start fresh)
-            if self.player_name in self.discord_bot.claimed_by:
-                del self.discord_bot.claimed_by[self.player_name]
-            
-
-            # Archive and lock the thread to match CRCON behavior
-            try:
-                thread = interaction.message.channel
-                if isinstance(thread, discord.Thread):
-                    await thread.edit(archived=True, locked=True)
-            except Exception:
-                pass
-            
-            # Send confirmation message to player
-            try:
-                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
-                    await self.discord_bot.crcon_client.send_message_to_player(
-                        self.player_name,
-                        f"Votre ticket admin a été fermé par un modérateur. Merci !"
-                    )
-                    print(f"✅. Sent close confirmation to player: {self.player_name}")
-                else:
-                    print(f"⚠️ CRCON client not available to send close confirmation")
-            except Exception as msg_error:
-                print(f"⚠️ Could not send close confirmation to player: {msg_error}")
-                
-            print(f"🔧 Ticket closed for {self.player_name} by {interaction.user.display_name}")
-
-        except Exception as e:
-            print(f"Error closing ticket: {e}")
-            try:
-                await interaction.response.send_message("Error closing ticket", ephemeral=True)
-            except Exception:
-                pass
-        finally:
-            await self.discord_bot.finalize_ticket_close(
-                self.player_name,
-                thread_ref,
-                closed_by=interaction.user.display_name
-            )
 class ClaimTicketView(discord.ui.View):
-    def __init__(self, player_name: str, discord_bot):
+    def __init__(self, ticket_key: TicketKey, discord_bot):
         super().__init__(timeout=None)
-        self.player_name = player_name
+        self.ticket_key = ticket_key
         self.discord_bot = discord_bot
 
     @discord.ui.button(
-        label="Claim Ticket",
+        label="Prendre le ticket",
         style=discord.ButtonStyle.primary,
-        custom_id="claim_ticket_button"
+        custom_id="claim_ticket_button",
     )
-    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            claimed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
-                description=f"{interaction.user.display_name} s'est attribué le ticket.",
-                color=discord.Color.blue(),
-                timestamp=discord.utils.utcnow()
-            )
-            new_view = CloseTicketView(self.player_name, self.discord_bot)
-            await interaction.response.edit_message(embed=claimed_embed, view=new_view)
+    async def claim_ticket(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await self.discord_bot.claim_ticket_from_interaction(
+            self.ticket_key, interaction
+        )
 
-            # Notify player in-game via CRCON
-            try:
-                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
-                    await self.discord_bot.crcon_client.send_message_to_player(
-                        self.player_name,
-                        "Un modérateur s'occupe maintenant de votre demande."
-                    )
-            except Exception:
-                pass
-            # Record claimer for future panels and normalize status windows: keep only this message
-            try:
-                self.discord_bot.claimed_by[self.player_name] = interaction.user.display_name
-                msg_id = interaction.message.id
-                self.discord_bot.current_status_message[self.player_name] = msg_id
-                # Delete any other previous status messages
-                thread = interaction.message.channel
-                try:
-                    ids = self.discord_bot.status_messages.get(self.player_name, [])
-                    for mid in ids:
-                        if mid == msg_id:
-                            continue
-                        try:
-                            msg_obj = await thread.fetch_message(mid)
-                            await msg_obj.delete()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                # Reset tracking to only this one
-                self.discord_bot.status_messages[self.player_name] = [msg_id]
-            except Exception:
-                pass
-            # Update last activity when an admin takes the ticket
-            self.discord_bot.last_activity[self.player_name] = datetime.utcnow()
-        except Exception:
-            try:
-                await interaction.response.send_message("Error claiming ticket", ephemeral=True)
-            except:
-                pass
-    
     @discord.ui.button(
-        label="Fermer le ticket", 
-        style=discord.ButtonStyle.danger, 
+        label="Fermer le ticket",
+        style=discord.ButtonStyle.danger,
         emoji="🔒",
-        custom_id="close_ticket_button"
+        custom_id="close_ticket_button",
     )
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        thread_ref = interaction.message.channel if isinstance(interaction.message.channel, discord.Thread) else None
-        try:
-            # Apply CLOSED tag to thread
-            await self.discord_bot.apply_forum_tag(interaction.message.channel, 'CLOSED')
-            
-            # Update the controls embed to show closed state in green and remove controls
-            closed_embed = discord.Embed(
-                title="🎛️ Statut du ticket",
-                description=f"Le ticket de **{self.player_name}** est clôturé",
-                color=discord.Color.green(),
-                timestamp=discord.utils.utcnow()
-            )
-            # Disable the button and update embed on the message with the component
-            self.clear_items()
-            await interaction.response.edit_message(embed=closed_embed, view=None)
-            
-            # Remove player from active tickets tracking (Discord bot)
-            if self.player_name in self.discord_bot.player_tickets:
-                del self.discord_bot.player_tickets[self.player_name]
-            
-            # Remove from active threads (Discord bot)
-            if self.player_name in self.discord_bot.active_threads:
-                del self.discord_bot.active_threads[self.player_name]
-                
-            # Remove from active button messages (Discord bot)
-            if self.player_name in self.discord_bot.active_button_messages:
-                del self.discord_bot.active_button_messages[self.player_name]
-            
+    async def close_ticket(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await self.discord_bot.close_ticket_from_interaction(
+            self.ticket_key, interaction, self
+        )
 
-            # Archive and lock the thread to match CRCON behavior
-            try:
-                thread = interaction.message.channel
-                if isinstance(thread, discord.Thread):
-                    await thread.edit(archived=True, locked=True)
-            except Exception:
-                pass
-            
-            # Send confirmation message to player
-            try:
-                if hasattr(self.discord_bot, 'crcon_client') and self.discord_bot.crcon_client:
-                    await self.discord_bot.crcon_client.send_message_to_player(
-                        self.player_name,
-                        f"Votre ticket admin a été fermé par un modérateur. Merci !"
-                    )
-                    print(f"Sent close confirmation to player: {self.player_name}")
-                else:
-                    print(f" CRCON client not available to send close confirmation")
-            except Exception as msg_error:
-                print(f" Could not send close confirmation to player: {msg_error}")
-                
-            print(f" Ticket closed for {self.player_name} by {interaction.user.display_name}")
-            
-        except Exception as e:
-            print(f" Error closing ticket: {e}")
-            try:
-                await interaction.response.send_message(" Error closing ticket", ephemeral=True)
-            except:
-                pass
-        finally:
-            await self.discord_bot.finalize_ticket_close(
-                self.player_name,
-                thread_ref,
-                closed_by=interaction.user.display_name
-            )
 
 class DiscordBot:
-    def __init__(self, config, crcon_client):
+    """Discord side of the multi-server ticket router."""
+
+    STATUS_TAGS = ("NEW", "REPLIED", "OUTAGE", "CLOSED")
+
+    def __init__(self, config, crcon_clients):
         self.config = config
-        self.crcon_client = crcon_client
-        self.active_threads: Dict[str, discord.Thread] = {}
-        self.active_button_messages: Dict[str, discord.Message] = {}
-        self.player_tickets: Dict[str, bool] = {}  # Track players with active tickets
-        self.claimed_by: Dict[str, str] = {}  # Track who claimed a ticket
-        # Track status window messages per player so we can delete older ones
-        self.status_messages: Dict[str, List[int]] = {}
-        # Track the preserved claimed-status message id per player
-        self.claim_status_message: Dict[str, int] = {}
-        # Track the current dynamic status message (latest) to delete before posting a new one
-        self.current_status_message: Dict[str, int] = {}
-        # Track last activity timestamps for auto-closing logic
-        self.last_activity: Dict[str, datetime] = {}
-        # Auto-close configuration
-        self.auto_close_minutes = int(self.config.get('tickets.auto_close_minutes', 90))
+        self.servers = {server["id"]: server for server in config.get_servers()}
+
+        if isinstance(crcon_clients, dict):
+            self.crcon_clients = crcon_clients
+        else:
+            self.crcon_clients = {crcon_clients.server_id: crcon_clients}
+
+        missing_clients = set(self.servers) - set(self.crcon_clients)
+        if missing_clients:
+            raise ValueError(
+                f"Missing CRCON clients for server(s): {', '.join(sorted(missing_clients))}"
+            )
+
+        self.active_threads: Dict[TicketKey, discord.Thread] = {}
+        self.thread_tickets: Dict[int, TicketKey] = {}
+        self.active_button_messages: Dict[TicketKey, discord.Message] = {}
+        self.player_tickets: Dict[TicketKey, bool] = {}
+        self.player_names: Dict[TicketKey, str] = {}
+        self.claimed_by: Dict[TicketKey, str] = {}
+        self.status_messages: Dict[TicketKey, List[int]] = {}
+        self.current_status_message: Dict[TicketKey, int] = {}
+        self.last_activity: Dict[TicketKey, datetime] = {}
+        self.outage_threads: Dict[str, discord.Thread] = {}
+        self.forum_tags: Dict[str, Dict[str, Optional[discord.ForumTag]]] = {
+            server_id: {tag: None for tag in self.STATUS_TAGS}
+            for server_id in self.servers
+        }
+        self.health_event_queue: asyncio.Queue = asyncio.Queue()
+        self.health_event_task: Optional[asyncio.Task] = None
+
+        self.auto_close_minutes = int(
+            self.config.get("tickets.auto_close_minutes", 90)
+        )
         self.inactivity_check_interval = int(
-            self.config.get('tickets.inactivity_check_interval_seconds', 60)
+            self.config.get("tickets.inactivity_check_interval_seconds", 60)
         )
         self.inactivity_task: Optional[asyncio.Task] = None
-        
-        # Forum tags (will be populated on startup)
-        self.forum_tags = {
-            'NEW': None,
-            'REPLIED': None, 
-            'CLOSED': None
-        }
-        
-        # Set up Discord bot
+
         intents = discord.Intents.default()
         intents.message_content = True
-        
-        self.bot = commands.Bot(command_prefix='!', intents=intents)
-        
-        # Set up event handlers
+        self.bot = commands.Bot(command_prefix="!", intents=intents)
         self.setup_events()
-        
-        # Set CRCON callbacks
-        self.crcon_client.set_message_callback(self.handle_admin_request)
-        self.crcon_client.set_player_response_callback(self.handle_player_response)
-        
-        print(f"Discord bot initialized")
-        print(f"Admin channel ID: {self.config.get('discord.admin_channel_id')}")
-    
-    def get_admin_mentions(self) -> str:
-    #"""Get admin role mentions"""
-        admin_roles = self.config.get('discord.admin_roles', [])
-        if not admin_roles:
-            return ""
-        
-        mentions = []
-        for role_id in admin_roles:
-            mentions.append(f"<@&{role_id}>")
-        
-        return " ".join(mentions)
-    
+
+        for server_id, client in self.crcon_clients.items():
+            client.set_message_callback(partial(self.handle_admin_request, server_id))
+            client.set_player_response_callback(
+                partial(self.handle_player_response, server_id)
+            )
+            client.set_health_callback(partial(self.queue_health_event, server_id))
+
+        logger.info(
+            "Discord bot initialized for servers: %s", ", ".join(self.servers)
+        )
+
+    def get_client(self, server_id: str):
+        return self.crcon_clients[server_id]
+
+    def get_server(self, server_id: str) -> dict:
+        return self.servers[server_id]
+
+    def get_player_name(self, ticket_key: TicketKey) -> str:
+        return self.player_names.get(ticket_key, "Joueur inconnu")
+
+    def get_admin_mentions(self, server_id: str) -> str:
+        roles = self.get_server(server_id)["discord"].get("admin_roles", [])
+        return " ".join(f"<@&{role_id}>" for role_id in roles)
+
+    async def queue_health_event(self, server_id: str, event: dict):
+        """Queue health transitions so CRCON monitoring never waits on Discord."""
+        queued_event = dict(event)
+        queued_event["server_id"] = server_id
+        await self.health_event_queue.put(queued_event)
+
+    @staticmethod
+    def _safe_health_text(value, limit: int = 1024) -> str:
+        text = str(value or "Non renseigné").strip()
+        # Diagnostic data must never be able to generate an unexpected mention.
+        text = text.replace("@", "@\u200b")
+        if len(text) > limit:
+            return f"{text[: limit - 1]}…"
+        return text
+
+    @staticmethod
+    def _format_duration(total_seconds: int) -> str:
+        seconds = max(0, int(total_seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours} h {minutes} min {seconds} s"
+        if minutes:
+            return f"{minutes} min {seconds} s"
+        return f"{seconds} s"
+
+    async def monitor_health_events(self):
+        """Deliver queued incidents in order and retry across Discord outages."""
+        while not self.bot.is_closed():
+            try:
+                event = await self.health_event_queue.get()
+            except asyncio.CancelledError:
+                break
+
+            try:
+                delivered = False
+                while not delivered and not self.bot.is_closed():
+                    await self.bot.wait_until_ready()
+                    try:
+                        delivered = await self.deliver_health_event(event)
+                    except asyncio.CancelledError:
+                        raise
+                    except discord.HTTPException as exc:
+                        logger.error(
+                            "Discord outage alert delivery failed: server=%s error=%s",
+                            event.get("server_id"),
+                            exc,
+                        )
+                    except Exception as exc:
+                        logger.exception(
+                            "Unexpected outage alert error: server=%s error=%s",
+                            event.get("server_id"),
+                            exc,
+                        )
+                    if not delivered and not self.bot.is_closed():
+                        await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                break
+            finally:
+                self.health_event_queue.task_done()
+
+    async def deliver_health_event(self, event: dict) -> bool:
+        server_id = event["server_id"]
+        status = event.get("status")
+        thread = self.outage_threads.get(server_id)
+        existing_incident = thread is not None
+
+        if status in ("outage", "update"):
+            if thread is None:
+                channel = await self._get_forum(server_id)
+                if channel is None:
+                    return False
+
+                occurred_at = event.get("occurred_at") or discord.utils.utcnow()
+                date_time = format_paris_datetime(occurred_at)
+                server_name = self.get_server(server_id)["name"]
+                mentions = self.get_admin_mentions(server_id)
+                content = "🚨 **PANNE DU RESPONDER ADMIN** 🚨"
+                if mentions:
+                    content = f"{content}\n{mentions}"
+                outage_tag = self.forum_tags[server_id].get("OUTAGE")
+                fallback_tag = self.forum_tags[server_id].get("NEW")
+                tag = outage_tag or fallback_tag
+                thread, _ = await channel.create_thread(
+                    name=f"OUTAGE - {date_time} - {server_name}"[:100],
+                    content=content,
+                    applied_tags=[tag] if tag else [],
+                )
+                self.outage_threads[server_id] = thread
+
+            embed = discord.Embed(
+                title=(
+                    "🚨 Panne de surveillance détectée"
+                    if status == "outage" and not existing_incident
+                    else "⚠️ Mise à jour de la panne"
+                ),
+                description=(
+                    "Le responder ne peut plus garantir la réception des demandes "
+                    "`!admin` pour ce serveur."
+                ),
+                color=(
+                    discord.Color.red()
+                    if status == "outage"
+                    else discord.Color.orange()
+                ),
+                timestamp=event.get("occurred_at") or discord.utils.utcnow(),
+            )
+            embed.add_field(
+                name="🎮 Serveur",
+                value=self._safe_health_text(self.get_server(server_id)["name"]),
+            )
+            embed.add_field(
+                name="🧩 Composant",
+                value=self._safe_health_text(event.get("component")),
+            )
+            embed.add_field(
+                name="🕐 Détectée (Paris)",
+                value=format_paris_datetime(event.get("started_at")),
+            )
+            embed.add_field(
+                name="Résumé",
+                value=self._safe_health_text(event.get("summary")),
+                inline=False,
+            )
+            embed.add_field(
+                name="Détails techniques",
+                value=f"```\n{self._safe_health_text(event.get('detail'), 980)}\n```",
+                inline=False,
+            )
+            embed.add_field(
+                name="Endpoint",
+                value=self._safe_health_text(event.get("endpoint")),
+                inline=False,
+            )
+            await thread.send(embed=embed)
+            logger.warning(
+                "Outage ticket delivered: server=%s status=%s thread_id=%s",
+                server_id,
+                status,
+                thread.id,
+            )
+            return True
+
+        if status in ("recovered", "healthy"):
+            if thread is None:
+                return True
+
+            occurred_at = event.get("occurred_at") or discord.utils.utcnow()
+            started_at = event.get("started_at") or thread.created_at
+            duration_seconds = event.get("duration_seconds", 0)
+            if status == "healthy" and started_at:
+                duration_seconds = max(
+                    0, int((occurred_at - started_at).total_seconds())
+                )
+            embed = discord.Embed(
+                title="✅ Surveillance rétablie",
+                description=(
+                    "Le flux CRCON a renvoyé des données valides. La réception des "
+                    "demandes `!admin` est de nouveau opérationnelle."
+                ),
+                color=discord.Color.green(),
+                timestamp=occurred_at,
+            )
+            embed.add_field(
+                name="🎮 Serveur",
+                value=self._safe_health_text(self.get_server(server_id)["name"]),
+            )
+            embed.add_field(
+                name="Durée de la panne",
+                value=self._format_duration(duration_seconds),
+            )
+            embed.add_field(
+                name="Erreurs observées",
+                value=str(event.get("failure_count", 0)),
+            )
+            await thread.send(embed=embed)
+            await self.apply_forum_tag(server_id, thread, "CLOSED")
+            await thread.edit(archived=True, locked=True)
+            self.outage_threads.pop(server_id, None)
+            logger.info(
+                "Outage ticket closed after recovery: server=%s thread_id=%s",
+                server_id,
+                thread.id,
+            )
+            return True
+
+        logger.error(
+            "Unknown health event status: server=%s status=%s", server_id, status
+        )
+        return True
+
+    async def _get_forum(self, server_id: str) -> Optional[discord.ForumChannel]:
+        channel_id = int(
+            self.get_server(server_id)["discord"]["admin_channel_id"]
+        )
+        channel = self.bot.get_channel(channel_id)
+        if channel is None and self.bot.is_ready():
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                channel = None
+
+        if channel is None:
+            logger.error(
+                "Discord forum not found: server=%s channel_id=%s",
+                server_id,
+                channel_id,
+            )
+            return None
+        if not isinstance(channel, discord.ForumChannel):
+            logger.error(
+                "Configured Discord channel is not a forum: server=%s channel_id=%s type=%s",
+                server_id,
+                channel_id,
+                type(channel).__name__,
+            )
+            return None
+        return channel
+
     def setup_events(self):
-    #"""Set up Discord bot events"""
-        
         @self.bot.event
         async def on_ready():
-            print(f"{self.bot.user} has connected to Discord!")
-            logger.info(f'{self.bot.user} has connected to Discord!')
-            
-            # Setup forum tags
+            logger.info("%s connected to Discord", self.bot.user)
             await self.setup_forum_tags()
-            
-            # Launch inactivity monitor once the bot is ready
             if not self.inactivity_task or self.inactivity_task.done():
-                self.inactivity_task = self.bot.loop.create_task(self.monitor_ticket_inactivity())
-            
+                self.inactivity_task = asyncio.create_task(
+                    self.monitor_ticket_inactivity()
+                )
+            if not self.health_event_task or self.health_event_task.done():
+                self.health_event_task = asyncio.create_task(
+                    self.monitor_health_events(), name="discord-health-alerts"
+                )
+
         @self.bot.event
         async def on_message(message):
             if message.author == self.bot.user:
                 return
-            
             if isinstance(message.channel, discord.Thread):
                 await self.handle_thread_message(message)
-            
             await self.bot.process_commands(message)
-        
-        # Add cleanup command
-        @self.bot.command(name='cleanup_tickets')
+
+        @self.bot.command(name="cleanup_tickets")
         @commands.has_permissions(administrator=True)
         async def cleanup_tickets(ctx):
-        #"""Clean up tracking for deleted threads - Admin only"""
-            cleaned = 0
-            to_remove = []
-            
-            for player_name, thread in self.active_threads.items():
+            removed = 0
+            for ticket_key, thread in list(self.active_threads.items()):
                 try:
-                    await thread.fetch()
+                    await self.bot.fetch_channel(thread.id)
                 except (discord.NotFound, discord.Forbidden):
-                    to_remove.append(player_name)
-                    cleaned += 1
-            
-            # Remove all the invalid entries
-            for player_name in to_remove:
-                if player_name in self.player_tickets:
-                    del self.player_tickets[player_name]
-                if player_name in self.active_threads:
-                    del self.active_threads[player_name]
-                if player_name in self.active_button_messages:
-                    del self.active_button_messages[player_name]
-                if player_name in self.last_activity:
-                    del self.last_activity[player_name]
-                if player_name in self.last_activity:
-                    del self.last_activity[player_name]
-            
-            await ctx.send(f"Cleaned up {cleaned} deleted ticket(s)")
-    
+                    self._remove_ticket_state(ticket_key)
+                    self.get_client(ticket_key[0]).unregister_admin_thread(
+                        ticket_key[1]
+                    )
+                    removed += 1
+                except discord.HTTPException:
+                    continue
+            await ctx.send(f"{removed} ticket(s) supprimé(s) du suivi.")
+
     async def setup_forum_tags(self):
-    #"""Setup or get existing forum tags"""
-        try:
-            channel_id = self.config.get('discord.admin_channel_id')
-            if not channel_id:
-                print(f"No admin channel ID configured!")
-                return
-                
-            channel = self.bot.get_channel(int(channel_id))
-            
+        for server_id in self.servers:
+            channel = await self._get_forum(server_id)
             if not channel:
-                print(f" Could not find admin channel with ID: {channel_id}")
-                return
-            
-            if not isinstance(channel, discord.ForumChannel):
-                print(f"Channel is not a forum channel! Current type: {type(channel)}")
-                print(f"Please convert your admin channel to a Forum Channel in Discord")
-                return
-            
-            print(f"Found forum channel: {channel.name}")
-            
-            # Get existing tags or create them
-            existing_tags = {tag.name: tag for tag in channel.available_tags}
-            
-            for tag_name in ['NEW', 'REPLIED', 'CLOSED']:
-                if tag_name in existing_tags:
-                    self.forum_tags[tag_name] = existing_tags[tag_name]
-                    print(f"Found existing tag: {tag_name}")
-                else:
-                    # Create the tag
-                    emoji_map = {'NEW': '🆕', 'REPLIED': '💬', 'CLOSED': '🔒'}
-                    
+                continue
+
+            existing_tags = {tag.name.upper(): tag for tag in channel.available_tags}
+            for tag_name in self.STATUS_TAGS:
+                tag = existing_tags.get(tag_name)
+                if tag is None:
                     try:
-                        new_tag = await channel.create_tag(
-                            name=tag_name,
-                            moderated=False
+                        tag = await channel.create_tag(name=tag_name, moderated=False)
+                        logger.info(
+                            "Created forum tag: server=%s tag=%s",
+                            server_id,
+                            tag_name,
                         )
-                        self.forum_tags[tag_name] = new_tag
-                        print(f"Created new tag: {tag_name}")
-                    except Exception as tag_error:
-                        print(f"Failed to create tag {tag_name}: {tag_error}")
-            
-            print(f"Forum tags setup complete!")
-            
-        except Exception as e:
-            print(f"Error setting up forum tags: {e}")
-            logger.error(f"Error setting up forum tags: {e}")
-    
-    async def apply_forum_tag(self, thread: discord.Thread, tag_name: str):
-#"""Apply a forum tag to a thread"""
+                    except discord.HTTPException as exc:
+                        logger.error(
+                            "Failed to create forum tag: server=%s tag=%s error=%s",
+                            server_id,
+                            tag_name,
+                            exc,
+                        )
+                self.forum_tags[server_id][tag_name] = tag
+
+            logger.info(
+                "Discord forum ready: server=%s forum=%s channel_id=%s",
+                server_id,
+                channel.name,
+                channel.id,
+            )
+            if server_id not in self.outage_threads:
+                outage_tag = self.forum_tags[server_id].get("OUTAGE")
+                active_incidents = [
+                    thread
+                    for thread in channel.threads
+                    if not thread.archived
+                    and (
+                        thread.name.startswith("OUTAGE - ")
+                        or (
+                            outage_tag is not None
+                            and any(
+                                tag.id == outage_tag.id
+                                for tag in thread.applied_tags
+                            )
+                        )
+                    )
+                ]
+                if active_incidents:
+                    incident = max(
+                        active_incidents,
+                        key=lambda thread: thread.created_at,
+                    )
+                    self.outage_threads[server_id] = incident
+                    logger.info(
+                        "Reusing active outage ticket: server=%s thread_id=%s",
+                        server_id,
+                        incident.id,
+                    )
+
+    async def apply_forum_tag(
+        self, server_id: str, thread: discord.Thread, tag_name: str
+    ):
+        tag = self.forum_tags.get(server_id, {}).get(tag_name)
+        if tag is None:
+            logger.warning(
+                "Forum tag unavailable: server=%s tag=%s", server_id, tag_name
+            )
+            return
+
+        non_status_tags = [
+            current
+            for current in thread.applied_tags
+            if current.name.upper() not in self.STATUS_TAGS
+        ]
+        await thread.edit(applied_tags=non_status_tags + [tag])
+
+    async def claim_ticket_from_interaction(
+        self, ticket_key: TicketKey, interaction: discord.Interaction
+    ):
+        player_name = self.get_player_name(ticket_key)
+        claimer = interaction.user.display_name
         try:
-            if tag_name not in self.forum_tags or not self.forum_tags[tag_name]:
-                print(f"Tag {tag_name} not available")
-                return
-            
-            tag = self.forum_tags[tag_name]
-            
-            # Remove all existing status tags first
-            current_tags = [t for t in thread.applied_tags if t.name not in ['NEW', 'REPLIED', 'CLOSED']]
-            
-            # Add the new tag
-            new_tags = current_tags + [tag]
-            
-            await thread.edit(applied_tags=new_tags)
-            print(f" Applied {tag_name} tag to thread: {thread.name}")
-            
-        except Exception as e:
-            print(f" Error applying forum tag {tag_name}: {e}")
-            logger.error(f"Error applying forum tag: {e}")
+            self.claimed_by[ticket_key] = claimer
+            self.last_activity[ticket_key] = datetime.utcnow()
+            embed = discord.Embed(
+                title="🎛️ Statut du ticket",
+                description=(
+                    f"Ticket de **{player_name}** — pris en charge par **{claimer}**"
+                ),
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow(),
+            )
+            await interaction.response.edit_message(
+                embed=embed, view=CloseTicketView(ticket_key, self)
+            )
+            self.active_button_messages[ticket_key] = interaction.message
+            self.current_status_message[ticket_key] = interaction.message.id
+            self.status_messages[ticket_key] = [interaction.message.id]
+
+            server_id, player_id = ticket_key
+            sent = await self.get_client(server_id).send_message_to_player(
+                player_id,
+                player_name,
+                "Un modérateur s'occupe maintenant de votre demande.",
+            )
+            if not sent:
+                logger.warning(
+                    "Could not notify player of claim: server=%s player_id=%s",
+                    server_id,
+                    player_id,
+                )
+        except Exception as exc:
+            logger.error("Error claiming ticket %s: %s", ticket_key, exc)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Impossible de prendre ce ticket.", ephemeral=True
+                )
+
+    async def close_ticket_from_interaction(
+        self,
+        ticket_key: TicketKey,
+        interaction: discord.Interaction,
+        view: discord.ui.View,
+    ):
+        player_name = self.get_player_name(ticket_key)
+        thread = (
+            interaction.message.channel
+            if isinstance(interaction.message.channel, discord.Thread)
+            else self.active_threads.get(ticket_key)
+        )
+        try:
+            if thread:
+                await self.apply_forum_tag(ticket_key[0], thread, "CLOSED")
+            view.clear_items()
+            embed = discord.Embed(
+                title="🎛️ Statut du ticket",
+                description=(
+                    f"Le ticket de **{player_name}** est clôturé par "
+                    f"**{interaction.user.display_name}**"
+                ),
+                color=discord.Color.green(),
+                timestamp=discord.utils.utcnow(),
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            await self.finalize_ticket_close(
+                ticket_key,
+                thread,
+                notify_player_message=(
+                    "Votre ticket admin a été fermé par un modérateur. Merci !"
+                ),
+                closed_by=interaction.user.display_name,
+                closure_source="manual",
+            )
+        except Exception as exc:
+            logger.error("Error closing ticket %s: %s", ticket_key, exc)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Impossible de fermer ce ticket.", ephemeral=True
+                )
+
+    def _remove_ticket_state(self, ticket_key: TicketKey):
+        thread = self.active_threads.pop(ticket_key, None)
+        if thread:
+            self.thread_tickets.pop(thread.id, None)
+        self.player_tickets.pop(ticket_key, None)
+        self.player_names.pop(ticket_key, None)
+        self.active_button_messages.pop(ticket_key, None)
+        self.status_messages.pop(ticket_key, None)
+        self.current_status_message.pop(ticket_key, None)
+        self.claimed_by.pop(ticket_key, None)
+        self.last_activity.pop(ticket_key, None)
 
     async def finalize_ticket_close(
         self,
-        player_name: str,
+        ticket_key: TicketKey,
         thread: Optional[discord.Thread],
         *,
         notify_player_message: Optional[str] = None,
         closed_by: Optional[str] = None,
-        closure_source: str = "manual"
+        closure_source: str = "manual",
     ):
-        """Centralized cleanup routine when a ticket is closed."""
-        try:
-            target_thread = thread or self.active_threads.get(player_name)
-            if target_thread:
-                try:
-                    await self.apply_forum_tag(target_thread, 'CLOSED')
-                except Exception as tag_error:
-                    logger.error(f"Failed to apply CLOSED tag for {player_name}: {tag_error}")
+        server_id, player_id = ticket_key
+        player_name = self.get_player_name(ticket_key)
+        target_thread = thread or self.active_threads.get(ticket_key)
+        client = self.get_client(server_id)
 
-            # Remove tracking entries
-            self.player_tickets.pop(player_name, None)
-            self.active_threads.pop(player_name, None)
-            self.active_button_messages.pop(player_name, None)
-            self.status_messages.pop(player_name, None)
-            self.claim_status_message.pop(player_name, None)
-            self.current_status_message.pop(player_name, None)
-            self.claimed_by.pop(player_name, None)
-            self.last_activity.pop(player_name, None)
-
-            # Update CRCON tracking
+        if target_thread:
             try:
-                self.crcon_client.mark_ticket_closed(player_name)
-            except Exception as crcon_error:
-                logger.error(f"Failed to update CRCON tracking for {player_name}: {crcon_error}")
+                await self.apply_forum_tag(server_id, target_thread, "CLOSED")
+            except discord.HTTPException as exc:
+                logger.error("Failed to apply CLOSED tag to %s: %s", ticket_key, exc)
 
-            # Archive thread
-            if target_thread and isinstance(target_thread, discord.Thread):
-                try:
-                    await target_thread.edit(archived=True, locked=True)
-                except Exception as archive_error:
-                    logger.error(f"Failed to archive thread for {player_name}: {archive_error}")
+        if notify_player_message:
+            await client.send_message_to_player(
+                player_id, player_name, notify_player_message
+            )
 
-            # Notify player if required
-            if notify_player_message:
-                try:
-                    await self.crcon_client.send_message_to_player(player_name, notify_player_message)
-                except Exception as msg_error:
-                    print(f" Could not send close confirmation to {player_name}: {msg_error}")
+        client.mark_ticket_closed(player_id)
+        self._remove_ticket_state(ticket_key)
 
-            if closed_by:
-                print(f" Ticket closed for {player_name} by {closed_by} ({closure_source})")
-            else:
-                print(f" Ticket closed for {player_name} ({closure_source})")
+        if target_thread and isinstance(target_thread, discord.Thread):
+            try:
+                await target_thread.edit(archived=True, locked=True)
+            except discord.HTTPException as exc:
+                logger.error("Failed to archive ticket %s: %s", ticket_key, exc)
 
-        except Exception as e:
-            logger.error(f"Error finalizing ticket close for {player_name}: {e}")
+        logger.info(
+            "Ticket closed: server=%s player_id=%s player=%s by=%s source=%s",
+            server_id,
+            player_id,
+            player_name,
+            closed_by,
+            closure_source,
+        )
 
     async def monitor_ticket_inactivity(self):
-        """Background loop that closes inactive tickets."""
         await self.bot.wait_until_ready()
         inactivity_window = timedelta(minutes=self.auto_close_minutes)
         while not self.bot.is_closed():
             try:
                 now = datetime.utcnow()
-                active_players = list(self.player_tickets.keys())
-                for player_name in active_players:
-                    last = self.last_activity.get(player_name)
-                    if not last:
-                        self.last_activity[player_name] = now
-                        continue
+                for ticket_key in list(self.player_tickets):
+                    last = self.last_activity.setdefault(ticket_key, now)
                     if now - last >= inactivity_window:
-                        await self._close_ticket_for_inactivity(player_name)
+                        await self._close_ticket_for_inactivity(ticket_key)
             except asyncio.CancelledError:
                 break
-            except Exception as monitor_error:
-                logger.error(f"Inactivity monitor error: {monitor_error}")
-
+            except Exception as exc:
+                logger.error("Inactivity monitor error: %s", exc)
             await asyncio.sleep(self.inactivity_check_interval)
 
-    async def _close_ticket_for_inactivity(self, player_name: str):
-        """Close the player's ticket because it has been inactive too long."""
-        thread = self.active_threads.get(player_name)
+    async def _close_ticket_for_inactivity(self, ticket_key: TicketKey):
+        thread = self.active_threads.get(ticket_key)
         if not thread:
-            self.last_activity.pop(player_name, None)
+            self._remove_ticket_state(ticket_key)
             return
 
-        notice_embed = discord.Embed(
+        player_name = self.get_player_name(ticket_key)
+        notice = discord.Embed(
             title="[AUTO] Ticket clos automatiquement",
             description=(
-                f"Aucune activité détectée depuis {self.auto_close_minutes} minutes. "
-                "Ce ticket est maintenant fermé. Utilisez `!admin` pour rouvrir si nécessaire."
+                f"Aucune activité depuis {self.auto_close_minutes} minutes. "
+                "Utilisez `!admin` en jeu pour ouvrir un nouveau ticket."
             ),
             color=discord.Color.dark_grey(),
-            timestamp=discord.utils.utcnow()
+            timestamp=discord.utils.utcnow(),
         )
         try:
-            await thread.send(embed=notice_embed)
-        except Exception as send_error:
-            logger.error(f"Failed to post inactivity notice for {player_name}: {send_error}")
+            await thread.send(embed=notice)
+            status_message = self.active_button_messages.get(ticket_key)
+            if status_message:
+                status = discord.Embed(
+                    title="🎛️ Statut du ticket",
+                    description=(
+                        f"Ticket de **{player_name}** fermé automatiquement pour inactivité."
+                    ),
+                    color=discord.Color.dark_grey(),
+                    timestamp=discord.utils.utcnow(),
+                )
+                await status_message.edit(embed=status, view=None)
+        except discord.HTTPException as exc:
+            logger.error("Failed to update inactive ticket %s: %s", ticket_key, exc)
 
-        status_embed = discord.Embed(
-            title="Statut du ticket",
-            description=f"Ticket de **{player_name}** fermé automatiquement pour inactivité.",
-            color=discord.Color.dark_grey(),
-            timestamp=discord.utils.utcnow()
-        )
-        status_message = self.active_button_messages.get(player_name)
-        if status_message:
-            try:
-                await status_message.edit(embed=status_embed, view=None)
-            except Exception as edit_error:
-                logger.error(f"Failed to update status message for {player_name}: {edit_error}")
-
-        notify_text = (
-            f"Votre ticket admin a été fermé automatiquement après {self.auto_close_minutes} minutes sans activité."
-        )
         await self.finalize_ticket_close(
-            player_name,
+            ticket_key,
             thread,
-            notify_player_message=notify_text,
+            notify_player_message=(
+                f"Votre ticket admin a été fermé automatiquement après "
+                f"{self.auto_close_minutes} minutes sans activité."
+            ),
             closed_by="Fermeture automatique",
-            closure_source="auto_inactivity"
+            closure_source="auto_inactivity",
         )
-    
-    async def handle_admin_request(self, player_name: str, admin_message: str):
-    #"""Handle new admin request from game"""
-        try:
-            print(f" Discord handler called: {player_name} - {admin_message}")
-            
-            # Check if player already has an active ticket
-            if player_name in self.player_tickets and self.player_tickets[player_name]:
-                print(f" Player {player_name} already has an active ticket")
-                
-                # Add their message to the existing ticket if they provided one
-                if admin_message and admin_message.strip() and player_name in self.active_threads:
-                    try:
-                        thread = self.active_threads[player_name]
-                        
-                        # Create embed for the additional message
-                        now = datetime.now()
-                        embed = discord.Embed(
-                            title="💬 Message additionnel du joueur",
-                            description=admin_message,
-                            color=discord.Color.blue(),
-                            timestamp=now
-                        )
-                        embed.set_footer(text=f"From: {player_name}")
-                        
-                        await thread.send(embed=embed)
-                        print(f"Added player message to existing ticket: {player_name}")
-                        self.last_activity[player_name] = datetime.utcnow()
-                        
-                    except Exception as thread_error:
-                        print(f"Could not add message to existing thread: {thread_error}")
-                
-                # Send active ticket message
-                try:
-                    await self.crcon_client.send_message_to_player(
-                        player_name,
-                        "Vous avez déjà un ticket admin actif. Vous pouvez répondre à votre demande en écrivant dans le chat sans réutiliser !admin."
-                    )
-                except Exception as msg_error:
-                    print(f"Could not send duplicate ticket message to player: {msg_error}")
-                return
-            
-            channel_id = self.config.get('discord.admin_channel_id')
-            if not channel_id:
-                print("No admin channel ID configured")
-                return
-                
-            channel = self.bot.get_channel(int(channel_id))
-            
-            if not channel:
-                print(f"Could not find channel with ID: {channel_id}")
-                return
-            
-            if not isinstance(channel, discord.ForumChannel):
-                print(f"Channel {channel_id} is not a forum channel")
-                return
-            
-            # Create forum post with date/time and append player platform ID if available
-            now = datetime.now()
-            date_str = now.strftime("%Y-%m-%d")
-            time_str = now.strftime("%H:%M")
-            id_suffix = ""
-            player_team = None
-            try:
-                players = await self.crcon_client.get_players()
-                for p in players:
-                    if p.get('name') == player_name:
-                        platform_id = p.get('player_id') or p.get('steam_id_64')
-                        player_team = p.get('side')
-                        if platform_id:
-                            id_suffix = f" ({platform_id})"
-                        break
-            except Exception:
-                # If we fail to fetch players, just omit the ID
-                pass
-            post_name = f"{date_str} {time_str} - {player_name}{id_suffix}"
-            
-            # Create initial message content with admin mentions
-            admin_mentions = self.get_admin_mentions()
-            initial_content = f"🚨 **Nouveau ping MODO** 🚨\n{admin_mentions}" if admin_mentions else "🚨 **Nouveau ping MODO** 🚨"
-            print(f"Creating forum post: {post_name}")
-            
-            # Create forum post with NEW tag
-            new_tag = self.forum_tags.get('NEW')
-            initial_tags = [new_tag] if new_tag else []
-            
-            # Create the forum post with content (not empty message)
-            thread, message = await channel.create_thread(
-                name=post_name,
-                content=initial_content,
-                applied_tags=initial_tags
+
+    async def _get_player_team(self, server_id: str, player_id: str):
+        for player in await self.get_client(server_id).get_players():
+            if player.get("player_id") == player_id:
+                return player.get("team")
+        return None
+
+    async def handle_admin_request(
+        self, server_id: str, player_id: str, player_name: str, admin_message: str
+    ):
+        await self.bot.wait_until_ready()
+        ticket_key = (server_id, player_id)
+        self.player_names[ticket_key] = player_name
+        client = self.get_client(server_id)
+
+        if self.player_tickets.get(ticket_key):
+            thread = self.active_threads.get(ticket_key)
+            if thread and admin_message.strip():
+                embed = discord.Embed(
+                    title="💬 Message additionnel du joueur",
+                    description=admin_message,
+                    color=discord.Color.blue(),
+                    timestamp=discord.utils.utcnow(),
+                )
+                embed.set_footer(text=f"Joueur : {player_name}")
+                await thread.send(embed=embed)
+                self.last_activity[ticket_key] = datetime.utcnow()
+            await client.send_message_to_player(
+                player_id,
+                player_name,
+                "Vous avez déjà un ticket admin actif. Écrivez simplement dans le chat pour le compléter.",
             )
+            return
 
-            # Mark player as having an active ticket
-            self.player_tickets[player_name] = True
-            
-            # Store thread reference
-            self.active_threads[player_name] = thread
-            
-            # Register with CRCON client
-            self.crcon_client.register_admin_thread(player_name, {
-                'thread_id': thread.id,
-                'player_name': player_name
-            })
-            
-            # Create detailed embed with player info and request
-            embed = discord.Embed(
-                title="🚨 Ping MODO",
-                color=discord.Color.red(),
-                timestamp=now
+        channel = await self._get_forum(server_id)
+        if not channel:
+            return
+
+        now = datetime.now(PARIS_TIMEZONE)
+        date_time = format_paris_datetime(now)
+        thread_name = f"{date_time} - {player_name}"[:100]
+        mentions = self.get_admin_mentions(server_id)
+        content = "🚨 **Nouveau ping MODO** 🚨"
+        if mentions:
+            content = f"{content}\n{mentions}"
+
+        new_tag = self.forum_tags[server_id].get("NEW")
+        thread, _ = await channel.create_thread(
+            name=thread_name,
+            content=content,
+            applied_tags=[new_tag] if new_tag else [],
+        )
+
+        self.player_tickets[ticket_key] = True
+        self.active_threads[ticket_key] = thread
+        self.thread_tickets[thread.id] = ticket_key
+        self.last_activity[ticket_key] = datetime.utcnow()
+        client.register_admin_thread(
+            player_id,
+            {
+                "thread_id": thread.id,
+                "player_id": player_id,
+                "player_name": player_name,
+            },
+        )
+
+        embed = discord.Embed(
+            title="🚨 Ping MODO 🚨",
+            color=discord.Color.red(),
+            timestamp=now,
+        )
+        embed.add_field(name="🎮 Serveur", value=self.get_server(server_id)["name"])
+        embed.add_field(name="👤 Joueur", value=player_name)
+        embed.add_field(name="🆔 Player ID", value=f"`{player_id}`", inline=False)
+        embed.add_field(name="🕐 Heure de Paris", value=date_time)
+        embed.add_field(
+            name="💬 Message",
+            value=admin_message or "Demande d'assistance administrateur",
+            inline=False,
+        )
+        team = await self._get_player_team(server_id, player_id)
+        if team:
+            embed.add_field(name="⚑ Équipe", value=str(team))
+        await thread.send(embed=embed)
+
+        controls = discord.Embed(
+            title="🎛️ Statut du ticket",
+            description=f"Ticket de **{player_name}** — en attente",
+            color=discord.Color.blue(),
+            timestamp=now,
+        )
+        button_message = await thread.send(
+            embed=controls, view=ClaimTicketView(ticket_key, self)
+        )
+        self.active_button_messages[ticket_key] = button_message
+        self.current_status_message[ticket_key] = button_message.id
+        self.status_messages[ticket_key] = [button_message.id]
+
+        await client.send_message_to_player(
+            player_id,
+            player_name,
+            "Votre ticket admin a bien été reçu ! Écrivez simplement dans le chat pour répondre.",
+        )
+        logger.info(
+            "Ticket created: server=%s player_id=%s player=%s thread_id=%s",
+            server_id,
+            player_id,
+            player_name,
+            thread.id,
+        )
+
+    async def handle_player_response(
+        self,
+        server_id: str,
+        player_id: str,
+        player_name: str,
+        message: str,
+        event_time: str,
+    ):
+        ticket_key = (server_id, player_id)
+        self.player_names[ticket_key] = player_name
+        thread = self.active_threads.get(ticket_key)
+        if not thread:
+            await self.handle_admin_request(
+                server_id, player_id, player_name, message
             )
+            return
 
-            # Add role mentions to the title to re-ping
-            role_title = f"Ping {admin_mentions}" if admin_mentions else "Ping MODO"
-            embed.title = f"🚨 {role_title} 🚨"
-
-            embed.add_field(name="👤 Joueur", value=player_name, inline=True)
-            embed.add_field(name="🕐 Heure", value=f"{date_str} {time_str}", inline=True)
-            embed.add_field(name="💬 Message", value=admin_message or "No additional message", inline=False)
-            
-            # Add player side if available
-            if player_team:
-                try:
-                    embed.add_field(name="⚑ Team", value=player_team, inline=True)
-                except Exception:
-                    pass
-            # Post the detailed embed without controls
-            await thread.send(embed=embed)
-
-                        # Send initial controls panel (claim stage or already claimed)
-            claimer = self.claimed_by.get(player_name)
-            if claimer:
-                controls_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
-                    timestamp=now
-                )
-                view = CloseTicketView(player_name, self)
-            else:
-                controls_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - en attente",
-                    timestamp=now
-                )
-                view = ClaimTicketView(player_name, self)
-            button_message = await thread.send(embed=controls_embed, view=view)
-            self.active_button_messages[player_name] = button_message
-            # This is the baseline status window; track only this one
-            self.current_status_message[player_name] = button_message.id
-            self.status_messages[player_name] = [button_message.id]
-            self.last_activity[player_name] = datetime.utcnow()
-            
-            print(f"Created admin request thread for {player_name}")
-            
-            # Send confirmation to player
-            try:
-                await self.crcon_client.send_message_to_player(
-                    player_name,
-                    "Votre ticket admin a bien été reçu ! Vous pouvez répondre à ce ticket en écrivant dans le chat (inutile de réutiliser !admin)."
-                )
-                print(f"Sent confirmation to player: {player_name}")
-            except Exception as msg_error:
-                print(f"Could not send confirmation to player: {msg_error}")
-            
-        except Exception as e:
-            print(f"Error handling admin request: {e}")
-            logger.error(f"Error handling admin request: {e}")
-
-    async def handle_player_response(self, player_name: str, message: str, event_time: str):
-    #"""Handle player response in game"""
         try:
-            print(f"Player response received: {player_name} - {message}")
-            
-            if player_name not in self.active_threads:
-                print(f"No active thread for {player_name}. Creating a new ticket with player's message…")
-                await self.handle_admin_request(player_name, message)
-                return
-            
-            thread = self.active_threads[player_name]
-            
-            # Check if thread still exists by trying to send a message
-            # (Forum posts/threads don't have .fetch() method)
-            try:
-                # Try to get the thread's parent (this will fail if thread is deleted)
-                parent = thread.parent
-                if not parent:
-                    raise discord.NotFound("Thread parent not found")
-                    
-            except (discord.NotFound, discord.Forbidden, AttributeError):
-                print(f"Thread for {player_name} was deleted, cleaning up tracking and recreating ticket…")
-                # Clean up all tracking for this player
-                if player_name in self.player_tickets:
-                    del self.player_tickets[player_name]
-                if player_name in self.active_threads:
-                    del self.active_threads[player_name]
-                if player_name in self.active_button_messages:
-                    del self.active_button_messages[player_name]
-                
-                # Clean up CRCON tracking
-                self.crcon_client.unregister_admin_thread(player_name)
-                
-                print(f"Recreating ticket for {player_name} with latest message…")
-                await self.handle_admin_request(player_name, message)
-                return
-            
-            # Apply NEW tag (player has responded, needs admin attention)
-            await self.apply_forum_tag(thread, "NEW")
-            
-            # Create embed for player response (without redundant player name)
-            response_embed = discord.Embed(
-                title="💬 Réponse du joueur",
-                description=message,  # Just the message, no player name since it's already in the thread title
+            await self.apply_forum_tag(server_id, thread, "NEW")
+            response = discord.Embed(
+                title=f"💬 Réponse de {player_name}",
+                description=message,
                 color=discord.Color.blue(),
-                timestamp=discord.utils.utcnow()
+                timestamp=discord.utils.utcnow(),
             )
-            
             if event_time:
-                response_embed.set_footer(text=f"Game time: {event_time}")
-            
-            await thread.send(embed=response_embed)
-            print(f"Player response posted to Discord forum")
-            
-            # Before adding a new status window, remove previous ones except the preserved claimed-status
-            try:
-                preserved_id = self.claim_status_message.get(player_name)
-                ids = self.status_messages.get(player_name, [])
-                keep: List[int] = []
-                for mid in ids:
-                    if preserved_id and mid == preserved_id:
-                        keep.append(mid)
-                        continue
-                    try:
-                        msg_obj = await thread.fetch_message(mid)
-                        await msg_obj.delete()
-                    except Exception:
-                        pass
-                self.status_messages[player_name] = keep
-            except Exception:
-                pass
+                response.set_footer(
+                    text=f"Heure de Paris : {format_paris_datetime(event_time)}"
+                )
+            await thread.send(embed=response)
 
-            # Move button to bottom (no-op now; we edit the single status window)
-            
-            # Create new button message
-                        # Create new controls message (respect claimed state)
-            claimer = self.claimed_by.get(player_name)
+            claimer = self.claimed_by.get(ticket_key)
+            description = f"Ticket de **{player_name}** — en attente"
+            view = ClaimTicketView(ticket_key, self)
             if claimer:
-                button_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
-                    color=discord.Color.blue()
+                description = (
+                    f"Ticket de **{player_name}** — pris en charge par **{claimer}**"
                 )
-                view = CloseTicketView(player_name, self)
-            else:
-                button_embed = discord.Embed(
-                    title="🎛️ Statut du ticket",
-                    description=f"Ticket de **{player_name}** - en attente",
-                    color=discord.Color.blue()
-                )
-                view = ClaimTicketView(player_name, self)
-            updated_msg = None
-            msg_id = self.current_status_message.get(player_name)
-            if msg_id:
+                view = CloseTicketView(ticket_key, self)
+            controls = discord.Embed(
+                title="🎛️ Statut du ticket",
+                description=description,
+                color=discord.Color.blue(),
+            )
+
+            status_message = self.active_button_messages.get(ticket_key)
+            if status_message:
                 try:
-                    existing = await thread.fetch_message(msg_id)
-                    await existing.edit(embed=button_embed, view=view)
-                    updated_msg = existing
-                except Exception:
-                    updated_msg = None
-            if updated_msg is None:
-                updated_msg = await thread.send(embed=button_embed, view=view)
-            self.active_button_messages[player_name] = updated_msg
-            self.current_status_message[player_name] = updated_msg.id
-            # Delete any other previous status windows and track only this one
-            try:
-                ids = self.status_messages.get(player_name, [])
-                for mid in ids:
-                    if mid == updated_msg.id:
-                        continue
-                    try:
-                        msg_obj = await thread.fetch_message(mid)
-                        await msg_obj.delete()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            self.status_messages[player_name] = [updated_msg.id]
-            self.last_activity[player_name] = datetime.utcnow()
-            
-        except Exception as e:
-            print(f"Error handling player response: {e}")
-            logger.error(f"Error handling player response: {e}")
-            # Fallback: if the thread/channel is gone, recreate a fresh ticket and post there
-            try:
-                if isinstance(e, discord.NotFound) or "Unknown Channel" in str(e):
-                    print(f"Fallback: recreating ticket for {player_name} due to missing channel/thread")
-                    # Cleanup stale tracking
-                    if player_name in self.player_tickets:
-                        del self.player_tickets[player_name]
-                    if player_name in self.active_threads:
-                        del self.active_threads[player_name]
-                    if player_name in self.active_button_messages:
-                        del self.active_button_messages[player_name]
-                    self.crcon_client.unregister_admin_thread(player_name)
-                    await self.handle_admin_request(player_name, message)
-            except Exception as fallback_err:
-                print(f"Fallback failed: {fallback_err}")
+                    await status_message.edit(embed=controls, view=view)
+                except discord.HTTPException:
+                    status_message = None
+            if status_message is None:
+                status_message = await thread.send(embed=controls, view=view)
+                self.active_button_messages[ticket_key] = status_message
+                self.current_status_message[ticket_key] = status_message.id
+                self.status_messages[ticket_key] = [status_message.id]
+            self.last_activity[ticket_key] = datetime.utcnow()
+        except (discord.NotFound, discord.Forbidden):
+            self._remove_ticket_state(ticket_key)
+            self.get_client(server_id).unregister_admin_thread(player_id)
+            await self.handle_admin_request(
+                server_id, player_id, player_name, message
+            )
 
     async def handle_thread_message(self, message: discord.Message):
-    #"""Handle messages in admin threads"""
-        try:
-            # Skip if message is from bot
-            if message.author == self.bot.user:
-                return
-            
-            # Skip if not in a thread
-            if not isinstance(message.channel, discord.Thread):
-                return
-            
-            # Find which player this thread belongs to
-            player_name = None
-            for name, thread in self.active_threads.items():
-                if thread.id == message.channel.id:
-                    player_name = name
-                    break
-            
-            if not player_name:
-                print(f"Could not find player for thread: {message.channel.name}")
-                return
-            
-            # Skip system messages and embeds
-            if message.type != discord.MessageType.default or message.embeds:
-                return
-            
-            # Send admin response to player
-            admin_message = f"[ADMIN]: {message.content}"
-            
-            try:
-                await self.crcon_client.send_message_to_player(player_name, admin_message)
-                print(f"Sent admin response to {player_name}: {message.content}")
-                
-                # Apply REPLIED tag
-                await self.apply_forum_tag(message.channel, 'REPLIED')
-                
-                # Add reaction to confirm message was sent
-                await message.add_reaction("✅")
-                
-            except Exception as e:
-                print(f"Failed to send message to player {player_name}: {e}")
-                await message.add_reaction("❌")
+        if message.author == self.bot.user:
+            return
+        if message.type != discord.MessageType.default or message.embeds:
+            return
+        if not message.content.strip():
+            return
 
-            # Track latest activity whenever an admin responds
-            self.last_activity[player_name] = datetime.utcnow()
-            
-            # Auto-claim on first admin reply if not already claimed
-            if player_name not in self.claimed_by:
-                claimer = message.author.display_name
-                self.claimed_by[player_name] = claimer
-                
-                # Update controls panel to reflect claimed state
+        ticket_key = self.thread_tickets.get(message.channel.id)
+        if not ticket_key:
+            return
+
+        server_id, player_id = ticket_key
+        player_name = self.get_player_name(ticket_key)
+        sent = await self.get_client(server_id).send_message_to_player(
+            player_id, player_name, f"[ADMIN]: {message.content}"
+        )
+        if not sent:
+            await message.add_reaction("❌")
+            return
+
+        await self.apply_forum_tag(server_id, message.channel, "REPLIED")
+        await message.add_reaction("✅")
+        self.last_activity[ticket_key] = datetime.utcnow()
+
+        if ticket_key not in self.claimed_by:
+            claimer = message.author.display_name
+            self.claimed_by[ticket_key] = claimer
+            controls = discord.Embed(
+                title="🎛️ Statut du ticket",
+                description=(
+                    f"Ticket de **{player_name}** — pris en charge par **{claimer}**"
+                ),
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow(),
+            )
+            status_message = self.active_button_messages.get(ticket_key)
+            if status_message:
                 try:
-                    # Remove previous controls if present
-                    if player_name in self.active_button_messages:
-                        try:
-                            old_msg = self.active_button_messages[player_name]
-                            await old_msg.edit(view=None)
-                        except Exception:
-                            pass
-                    # Post claimed controls with Close button only
-                    controls_embed = discord.Embed(
-                        title="🎛️ Statut du ticket",
-                        description=f"Ticket de **{player_name}** - pris en charge par **{claimer}**",
-                        color=discord.Color.blue(),
-                        timestamp=discord.utils.utcnow()
+                    await status_message.edit(
+                        embed=controls, view=CloseTicketView(ticket_key, self)
                     )
-                    view = CloseTicketView(player_name, self)
-                    new_msg = await message.channel.send(embed=controls_embed, view=view)
-                    self.active_button_messages[player_name] = new_msg
-                    # Preserve claimed status window and track it
-                    try:
-                        self.claim_status_message[player_name] = new_msg.id
-                        arr = self.status_messages.get(player_name, [])
-                        arr.append(new_msg.id)
-                        self.status_messages[player_name] = arr
-                    except Exception:
-                        pass
-                except Exception as panel_err:
-                    print(f"? Failed to update claimed controls panel: {panel_err}")
-        except Exception as e:
-            print(f"Error handling thread message: {e}")
-            logger.error(f"Error handling thread message: {e}")
+                except discord.HTTPException:
+                    status_message = None
+            if status_message is None:
+                status_message = await message.channel.send(
+                    embed=controls, view=CloseTicketView(ticket_key, self)
+                )
+                self.active_button_messages[ticket_key] = status_message
+                self.current_status_message[ticket_key] = status_message.id
+                self.status_messages[ticket_key] = [status_message.id]
 
     async def start(self):
-    #"""Start the Discord bot"""
-        try:
-            token = self.config.get('discord.token')
-            if not token:
-                raise ValueError("Discord token not found in config")
-            
-            print(f"Starting Discord bot...")
-            await self.bot.start(token)
-            
-        except Exception as e:
-            print(f"Failed to start Discord bot: {e}")
-            logger.error(f"Failed to start Discord bot: {e}")
-            raise
+        token = self.config.get("discord.token")
+        if not token:
+            raise ValueError("Discord token not found in configuration")
+        await self.bot.start(token)
 
+    async def close(self):
+        if self.inactivity_task:
+            self.inactivity_task.cancel()
+        if self.health_event_task:
+            self.health_event_task.cancel()
+        if not self.bot.is_closed():
+            await self.bot.close()

@@ -1,7 +1,13 @@
 # Environment variables
 .env
+.env.*
+!.env.example
+*~
+\#*\#
 
 # Python
+venv/
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,6 +37,9 @@ wheels/
 .idea/
 *.swp
 *.swo
+
+# Node.js
+node_modules/
 
 # OS
 .DS_Store

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from discord_bot.bot import DiscordBot
 
@@ -8,12 +9,16 @@ class FakeClient:
         self.server_id = server_id
         self.message_callback = None
         self.response_callback = None
+        self.health_callback = None
 
     def set_message_callback(self, callback):
         self.message_callback = callback
 
     def set_player_response_callback(self, callback):
         self.response_callback = callback
+
+    def set_health_callback(self, callback):
+        self.health_callback = callback
 
 
 class FakeConfig:
@@ -43,6 +48,19 @@ class FakeConfig:
         ]
 
 
+class FakeOutageThread:
+    def __init__(self):
+        self.id = 999
+        self.sent = []
+        self.edits = []
+
+    async def send(self, **kwargs):
+        self.sent.append(kwargs)
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
+
 class DiscordRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_registers_server_specific_callbacks_and_keys(self):
         clients = {server_id: FakeClient(server_id) for server_id in ("ww2", "vietnam")}
@@ -50,6 +68,8 @@ class DiscordRoutingTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertEqual(clients["ww2"].message_callback.args[0], "ww2")
             self.assertEqual(clients["vietnam"].message_callback.args[0], "vietnam")
+            self.assertEqual(clients["ww2"].health_callback.args[0], "ww2")
+            self.assertEqual(clients["vietnam"].health_callback.args[0], "vietnam")
             self.assertIs(bot.get_client("ww2"), clients["ww2"])
             self.assertEqual(bot.get_admin_mentions("ww2"), "<@&10>")
             self.assertEqual(bot.get_admin_mentions("vietnam"), "<@&20>")
@@ -58,6 +78,50 @@ class DiscordRoutingTests(unittest.IsolatedAsyncioTestCase):
             bot.player_names[("vietnam", "same-id")] = "Vietnam player"
             self.assertEqual(bot.get_player_name(("ww2", "same-id")), "Classic player")
             self.assertEqual(bot.get_player_name(("vietnam", "same-id")), "Vietnam player")
+            self.assertIn("OUTAGE", bot.STATUS_TAGS)
+
+            await clients["ww2"].health_callback(
+                {"status": "outage", "summary": "test"}
+            )
+            queued_event = await bot.health_event_queue.get()
+            self.assertEqual(queued_event["server_id"], "ww2")
+            self.assertEqual(queued_event["status"], "outage")
+            bot.health_event_queue.task_done()
+        finally:
+            await bot.close()
+
+    async def test_recovery_closes_and_archives_the_outage_thread(self):
+        clients = {server_id: FakeClient(server_id) for server_id in ("ww2", "vietnam")}
+        bot = DiscordBot(FakeConfig(), clients)
+        thread = FakeOutageThread()
+        bot.outage_threads["ww2"] = thread
+        applied_tags = []
+
+        async def apply_tag(server_id, target_thread, tag_name):
+            applied_tags.append((server_id, target_thread, tag_name))
+
+        bot.apply_forum_tag = apply_tag
+        now = datetime.now(timezone.utc)
+        try:
+            delivered = await bot.deliver_health_event(
+                {
+                    "status": "recovered",
+                    "server_id": "ww2",
+                    "occurred_at": now,
+                    "started_at": now - timedelta(minutes=2),
+                    "duration_seconds": 125,
+                    "failure_count": 4,
+                }
+            )
+
+            self.assertTrue(delivered)
+            self.assertEqual(applied_tags, [("ww2", thread, "CLOSED")])
+            self.assertEqual(thread.edits, [{"archived": True, "locked": True}])
+            self.assertNotIn("ww2", bot.outage_threads)
+            self.assertEqual(len(thread.sent), 1)
+            self.assertEqual(
+                thread.sent[0]["embed"].fields[1].value, "2 min 5 s"
+            )
         finally:
             await bot.close()
 

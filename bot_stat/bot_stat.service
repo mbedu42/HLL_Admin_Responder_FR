@@ -1,0 +1,17 @@
+[Unit]
+Description=Discord game-server status bots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+WorkingDirectory=/home/debian/HLL_Admin_Responder_FR/bot_stat
+EnvironmentFile=/home/debian/HLL_Admin_Responder_FR/bot_stat/.env
+ExecStart=/usr/bin/node /home/debian/HLL_Admin_Responder_FR/bot_stat/index.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+{
+  "name": "bot-status-hll",
+  "version": "1.0.0",
+  "description": "Bot Discord statut pour Hell Let Loose",
+  "main": "index.js",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "gamedig": "^4.3.0"
+  }
+}

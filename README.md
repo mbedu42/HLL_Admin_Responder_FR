@@ -1,23 +1,28 @@
 # Hell Let Loose Admin Responder
 
-Discord bot that automatically creates forum posts when players request admin help in-game. Admins can respond directly from Discord and messages are sent back to players.
-
-## This currently only supports Single Servers. I will work on Multiple Server unless someone beats me to it.
+Discord bot that creates forum posts when players request admin help in-game. It
+can monitor several CRCON instances at once and route each game server to its own
+Discord forum.
 
 ## Features
 
-- **Real-time Monitoring**: Watches HLL server for `!admin` commands
+- **Multi-server routing**: one CRCON WebSocket and one Discord forum per server
+- **Stable player tracking**: tickets use CRCON `player_id`, not the display name
+- **Real-time Monitoring**: Watches HLL servers for `!admin` commands
 - **Discord Forum Posts**: Auto-creates tickets with tagging (NEW/REPLIED/CLOSED)
 - **Two-way Chat**: Reply in Discord → message sent to player in-game
 - **Smart Prevention**: One ticket per player, prevents spam
 - **Auto Close**: Tickets close automatically after 90 minutes of inactivity
+- **Outage Tickets**: CRCON/API/log-stream failures create one deduplicated
+  Discord incident thread, ping admins, add diagnostic details, and close after
+  a verified recovery
 - **Background Service**: Run with systemd or tmux
 
 ## How It Works
 
 1. Player types `admin` command in-game
-2. Bot detects command via CRCON logs
-3. Creates Discord forum post with NEW tag
+2. Bot reads both `player_id` and the current display name from the CRCON log
+3. Creates a post in the forum configured for that game server, with the NEW tag
 4. Mentions admin roles (if configured)
 5. Admin responds in Discord thread
 6. Bot sends admin message to player in-game
@@ -25,6 +30,20 @@ Discord bot that automatically creates forum posts when players request admin he
 8. Player replies via in game chat, no need to use !admin again
 9. Admin closes ticket when resolved
 10. Player receives close confirmation
+
+### Outage Monitoring
+
+Each CRCON client reports health transitions to its configured Discord forum.
+The first API, WebSocket, malformed-payload, or server-reported log-stream
+failure creates an `OUTAGE` thread and mentions that server's admin roles.
+Repeated identical failures are counted without creating duplicate tickets. If
+the failure changes (for example, an HTTP 502 becomes "Log stream is not
+enabled"), the existing incident receives an update. After the WebSocket sends
+a valid payload, the bot posts the outage duration and error count, applies the
+`CLOSED` tag, and archives the incident.
+
+Discord cannot receive an alert while Discord itself is unreachable. Health
+events are therefore queued and delivered in order when the bot reconnects.
 
 ## Pre-Installation Setup
 
@@ -50,21 +69,26 @@ Generate an invite link with these permissions:
 **Invite Bot to Server:**
 Use the generated invite link to add the bot to your Discord server.
 
-**Create Forum Channel:**
-1. Create a new forum channel in your Discord server
+**Create Forum Channels:**
+1. Create one forum channel for each game server
 2. Right-click the forum channel → "Copy Channel ID"
 3. Save this ID (you'll need it for configuration)
 
 ### 2. CRCON Access Setup
 
 **Required CRCON Permissions:**
-Your CRCON account must have at least:
-- **api|rcon user|Can message players**
-- **api|logs|Can view logs**
+The API user on every CRCON instance needs:
+
+- `api.can_view_get_status`
+- `api.can_view_structured_logs`
+- `api.can_message_players`
+
+The same raw API key may be registered on several CRCON instances. Separate keys
+are preferable when operational key rotation needs to be independent.
 
 **Information Needed:**
-- CRCON server URL (e.g., `http://your-server-ip:8010`)
-- CRCON API
+- One HTTPS CRCON URL per game server
+- An API key registered on every configured CRCON
 
 ## Installation
 
@@ -72,9 +96,9 @@ Your CRCON account must have at least:
 
 Before starting, have these ready:
 - ✅ Discord bot token
-- ✅ Discord forum channel ID
-- ✅ CRCON server URL
-- ✅ CRCON API
+- ✅ One Discord forum channel ID per game server
+- ✅ One CRCON URL per game server
+- ✅ CRCON API key(s)
 - ✅ Admin role IDs (optional)
 
 ### 2. Clone the Repository
@@ -105,22 +129,66 @@ nano .env
 ```
 
 Enter your prepared information:
-```env
-# RCON Settings
-RCON_HOST=your_rcon_host
-RCON_PORT=your_rcon_port
-RCON_PASSWORD=your_rcon_password
 
-# Discord Settings
+```env
+# Discord account shared by all game servers
 DISCORD_TOKEN=your_discord_bot_token
 DISCORD_GUILD_ID=your_discord_guild_id
-DISCORD_ADMIN_CHANNEL_ID=your_discord_admin_channel_id
 DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
 
-# CRCON Settings
-CRCON_BASE_URL=http://your_crcon_host:port
-CRCON_API_TOKEN=your_crcon_api_token
+# Dynamic array: each object is one complete game-server route
+GAME_SERVERS='[
+  {
+    "id": "ww2",
+    "name": "HLL Classique",
+    "rcon": {
+      "host": "game-server.example.com",
+      "port": 7777,
+      "password": "your_ww2_rcon_password"
+    },
+    "crcon": {
+      "base_url": "https://modo.ww2.example.com",
+      "api_token": "your_ww2_crcon_api_token"
+    },
+    "discord": {
+      "channel_id": "your_ww2_forum_channel_id"
+    }
+  },
+  {
+    "id": "vietnam",
+    "name": "HLL Vietnam",
+    "rcon": {
+      "host": "vietnam-game-server.example.com",
+      "port": 7777,
+      "password": "your_vietnam_rcon_password"
+    },
+    "crcon": {
+      "base_url": "https://modo.viet.example.com",
+      "api_token": "your_vietnam_crcon_api_token"
+    },
+    "discord": {
+      "channel_id": "your_vietnam_forum_channel_id"
+    }
+  }
+]'
 ```
+
+`GAME_SERVERS` is the only server inventory. Add, remove or reorder complete
+objects to change the monitored servers; no Python or YAML change is needed.
+Every object must contain:
+
+- a unique `id` using lowercase letters, digits, `_` or `-`;
+- the game server's RCON `host`, `port` and `password`;
+- its CRCON `base_url` and `api_token`;
+- the target Discord forum `channel_id`.
+
+`name` is optional and controls the server label shown in Discord. A per-server
+`discord.admin_roles` array may override the global `DISCORD_ADMIN_ROLES` list.
+The `.env` value is JSON: keep its outer single quotes and JSON double quotes.
+
+The old global `RCON_*`, `CRCON_BASE_URL`, `CRCON_API_TOKEN` and per-server URL
+variables are no longer needed. Legacy YAML configuration is still understood
+by the code for compatibility, but `GAME_SERVERS` takes priority when present.
 
 ### Ticket Auto-Close Settings
 
@@ -295,10 +363,13 @@ journalctl -u hll-admin -n 100 --no-pager
 ```
 
 **CRCON connection issues:**
-- Verify URL is accessible: `curl http://your-crcon-server:8010`
-- Check API `.env`
-- Ensure CRCON API is enabled
-- Verify account permissions
+- Verify each status endpoint with the matching bearer token
+- Verify that HTTPS and `wss://.../ws/logs` are accessible
+- Check every server entry and environment variable
+- Verify all three required CRCON permissions listed above
+
+Successful startup logs contain one `Connected to CRCON API` and one
+`WebSocket stream started` line per configured server.
 
 **Discord not working:**
 - Check bot token is correct
@@ -308,8 +379,8 @@ journalctl -u hll-admin -n 100 --no-pager
 
 ## Getting Discord IDs
 
-**Forum Channel ID:**
-1. Right-click forum channel → "Copy Channel ID"
+**Forum Channel IDs:**
+1. Right-click each forum channel → "Copy Channel ID"
 2. If you don't see this option, enable Developer Mode in Discord settings
 
 **Role IDs (for mentions):**
