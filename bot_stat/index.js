@@ -13,7 +13,8 @@ const builtInDefaults = {
     fallbackMaxPlayers: 100,
     maxMapLength: 16,
     unknownMapText: 'Map Inconnue',
-    statusTemplate: '📍 {map} | 🎮 {players}/{maxPlayers}',
+    unknownTimeText: '--:--:--',
+    statusTemplate: '🎮{players}/{maxPlayers} ⏳{timeRemaining} 📍{map}',
     unavailableText: '🔴 Serveur indisponible',
     onlineStatus: 'online',
     offlineStatus: 'dnd',
@@ -101,6 +102,7 @@ function loadConfiguration() {
         assertIntegerInRange(config.fallbackMaxPlayers, 1, 10_000, `${location}.fallbackMaxPlayers`);
         assertIntegerInRange(config.maxMapLength, 1, 64, `${location}.maxMapLength`);
         assertNonEmptyString(config.statusTemplate, `${location}.statusTemplate`);
+        assertNonEmptyString(config.unknownTimeText, `${location}.unknownTimeText`);
         assertNonEmptyString(config.unavailableText, `${location}.unavailableText`);
 
         return config;
@@ -133,7 +135,30 @@ function assertHttpUrl(value, name) {
 }
 
 function renderStatus(template, values) {
-    return template.replace(/\{(map|players|maxPlayers|id)\}/g, (_, key) => String(values[key]));
+    return template.replace(
+        /\{(map|players|maxPlayers|timeRemaining|id)\}/g,
+        (_, key) => String(values[key]),
+    );
+}
+
+function formatRemainingTime(value, unavailableText) {
+    if (value === null || value === undefined || value === '') {
+        return unavailableText;
+    }
+
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || numericValue < 0) {
+        return unavailableText;
+    }
+
+    const totalSeconds = Math.floor(numericValue);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    return [hours, minutes, seconds]
+        .map((part) => String(part).padStart(2, '0'))
+        .join(':');
 }
 
 function truncateText(value, maximumLength) {
@@ -157,6 +182,7 @@ async function queryGameDig(config) {
         map: state.map,
         players: Array.isArray(state.players) ? state.players.length : 0,
         maxPlayers: state.maxplayers,
+        timeRemainingSeconds: state.raw?.timeleft,
     };
 }
 
@@ -190,6 +216,7 @@ async function queryCrcon(config) {
                 currentMap?.id,
             players: result.player_count,
             maxPlayers: result.max_player_count,
+            timeRemainingSeconds: result.time_remaining,
         };
     } finally {
         clearTimeout(timeout);
@@ -213,6 +240,10 @@ async function queryAndUpdate(client, config) {
             map: truncateText(state.map || config.unknownMapText, config.maxMapLength),
             players: Number.isInteger(state.players) ? state.players : 0,
             maxPlayers: state.maxPlayers || config.fallbackMaxPlayers,
+            timeRemaining: formatRemainingTime(
+                state.timeRemainingSeconds,
+                config.unknownTimeText,
+            ),
         };
         const statusText = renderStatus(config.statusTemplate, values);
 
@@ -311,15 +342,23 @@ async function main() {
     console.log(`${results.length - failures.length}/${results.length} bot(s) started`);
 }
 
-process.once('SIGTERM', () => {
-    shutdown('SIGTERM').finally(() => process.exit(0));
-});
+if (require.main === module) {
+    process.once('SIGTERM', () => {
+        shutdown('SIGTERM').finally(() => process.exit(0));
+    });
 
-process.once('SIGINT', () => {
-    shutdown('SIGINT').finally(() => process.exit(0));
-});
+    process.once('SIGINT', () => {
+        shutdown('SIGINT').finally(() => process.exit(0));
+    });
 
-main().catch((error) => {
-    console.error(`Startup failed: ${error.message}`);
-    process.exit(1);
-});
+    main().catch((error) => {
+        console.error(`Startup failed: ${error.message}`);
+        process.exit(1);
+    });
+}
+
+module.exports = {
+    formatRemainingTime,
+    queryCrcon,
+    renderStatus,
+};

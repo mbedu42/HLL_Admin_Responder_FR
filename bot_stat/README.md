@@ -28,7 +28,7 @@ Values from `defaults` may be overridden in any server object. For example:
   "source": "crcon",
   "discordToken": "replace-me",
   "refreshIntervalMs": 60000,
-  "statusTemplate": "Vietnam | {map} | {players}/{maxPlayers}",
+  "statusTemplate": "Vietnam {players}/{maxPlayers} ⏳{timeRemaining} {map}",
   "crcon": {
     "baseUrl": "http://127.0.0.1:7001",
     "publicInfoPath": "/api/get_public_info",
@@ -37,9 +37,11 @@ Values from `defaults` may be overridden in any server object. For example:
 }
 ```
 
-Supported status placeholders are `{id}`, `{map}`, `{players}`, and
-`{maxPlayers}`. The JSON may be formatted across multiple lines as long as the
-entire value remains enclosed in single quotes.
+Supported status placeholders are `{id}`, `{map}`, `{players}`, `{maxPlayers}`,
+and `{timeRemaining}`. The remaining round time is formatted as `HH:MM:SS`;
+`unknownTimeText` is used when the selected query source does not provide it.
+The JSON may be formatted across multiple lines as long as the entire value
+remains enclosed in single quotes.
 
 CRCON's short map name is used for the Discord activity. `maxMapLength` limits
 long fallback names and may be overridden per server.
