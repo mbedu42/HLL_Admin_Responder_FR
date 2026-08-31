@@ -17,7 +17,10 @@ class ServerConfigTests(unittest.TestCase):
     def test_normalizes_multiple_servers_and_inherits_roles(self):
         config = config_with(
             {
-                "discord": {"admin_roles": "10,20"},
+                "discord": {
+                    "admin_roles": "10,20",
+                    "outage_user_ids": "40,50",
+                },
                 "servers": [
                     {
                         "id": "ww2",
@@ -45,6 +48,12 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(servers[0]["crcon"]["base_url"], "https://ww2")
         self.assertEqual(servers[0]["discord"]["admin_roles"], ["10", "20"])
         self.assertEqual(servers[1]["discord"]["admin_roles"], ["30"])
+        self.assertEqual(
+            servers[0]["discord"]["outage_user_ids"], ["40", "50"]
+        )
+        self.assertEqual(
+            servers[1]["discord"]["outage_user_ids"], ["40", "50"]
+        )
         self.assertEqual(servers[1]["discord"]["admin_channel_id"], "200")
 
     def test_legacy_single_server_configuration_still_works(self):

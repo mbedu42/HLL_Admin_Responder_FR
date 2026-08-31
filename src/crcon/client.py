@@ -186,36 +186,186 @@ class CRCONClient:
             )
             return False
 
-    async def get_players(self) -> list:
-        """Return current player display metadata, keyed by CRCON player_id."""
+    async def _get_api_result(self, endpoint: str) -> dict:
+        """Return a CRCON API result without interrupting ticket delivery."""
         try:
             await self.create_session()
             async with self.session.get(
-                f"{self.base_url}/api/get_live_game_stats"
+                f"{self.base_url}/api/{endpoint}"
             ) as response:
                 if response.status != 200:
-                    logger.error(
-                        "Failed to get players: server=%s status=%s",
+                    logger.warning(
+                        "Optional CRCON context unavailable: server=%s "
+                        "endpoint=%s status=%s",
                         self.server_id,
+                        endpoint,
                         response.status,
                     )
-                    return []
+                    return {}
 
                 data = await response.json()
-                stats = ((data.get("result") or {}).get("stats") or [])
-                return [
-                    {
-                        "name": stat.get("player"),
-                        "player_id": stat.get("player_id"),
-                        "team": stat.get("team") or stat.get("side"),
-                    }
-                    for stat in stats
-                ]
+                if data.get("failed") is True:
+                    logger.warning(
+                        "CRCON rejected optional context request: server=%s "
+                        "endpoint=%s error=%s",
+                        self.server_id,
+                        endpoint,
+                        data.get("error"),
+                    )
+                    return {}
+                result = data.get("result") or {}
+                return result if isinstance(result, dict) else {}
         except Exception as exc:
-            logger.error(
-                "Error getting players: server=%s error=%s", self.server_id, exc
+            logger.warning(
+                "Error getting optional CRCON context: server=%s endpoint=%s "
+                "error=%s",
+                self.server_id,
+                endpoint,
+                exc,
             )
-            return []
+            return {}
+
+    async def get_players(self) -> list:
+        """Return current player display metadata, keyed by CRCON player_id."""
+        data = await self._get_api_result("get_live_game_stats")
+        stats = data.get("stats") or []
+        return [
+            {
+                "name": stat.get("player"),
+                "player_id": stat.get("player_id") or stat.get("steam_id_64"),
+                "team": stat.get("team") or stat.get("side"),
+            }
+            for stat in stats
+            if isinstance(stat, dict)
+        ]
+
+    @staticmethod
+    def _map_value(current_map: object, *keys: str):
+        if not isinstance(current_map, dict):
+            return current_map if isinstance(current_map, str) else None
+
+        map_metadata = current_map.get("map")
+        sources = [map_metadata, current_map]
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            for key in keys:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
+    @staticmethod
+    def _display_mode(game_state: dict, current_map: object) -> Optional[str]:
+        mode = game_state.get("game_mode") or game_state.get("mode")
+        if not mode and isinstance(current_map, dict):
+            mode = current_map.get("game_mode") or current_map.get("mode")
+
+        layer_id = None
+        if isinstance(current_map, dict):
+            layer_id = current_map.get("id") or current_map.get("layer")
+        if not mode and layer_id:
+            layer_name = str(layer_id).lower()
+            for known_mode in ("warfare", "offensive", "skirmish", "control"):
+                if known_mode in layer_name:
+                    mode = known_mode
+                    break
+
+        if mode in (None, ""):
+            return None
+        clean_mode = str(mode).rsplit(".", 1)[-1].replace("_", " ").strip()
+        return clean_mode.title()
+
+    @staticmethod
+    def _display_time_remaining(game_state: dict) -> Optional[str]:
+        value = game_state.get("raw_time_remaining")
+        if value in (None, ""):
+            value = game_state.get("time_remaining")
+        if value in (None, ""):
+            return None
+
+        if isinstance(value, (int, float)) or str(value).strip().isdigit():
+            seconds = max(0, int(float(value)))
+            hours, remainder = divmod(seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+        clean_value = str(value).strip()
+        if " day" in clean_value:
+            clean_value = clean_value.rsplit(", ", 1)[-1]
+        return clean_value
+
+    @classmethod
+    def _build_ticket_context(
+        cls, live_stats: dict, game_state: dict, player_id: str
+    ) -> dict:
+        """Normalize CRCON's changing response shapes for the Discord card."""
+        stats = live_stats.get("stats") or []
+        player = next(
+            (
+                stat
+                for stat in stats
+                if isinstance(stat, dict)
+                and str(stat.get("player_id") or stat.get("steam_id_64") or "")
+                == str(player_id)
+            ),
+            {},
+        )
+
+        current_map = game_state.get("current_map")
+        map_name = cls._map_value(
+            current_map, "pretty_name", "human_name", "shortname", "name", "id"
+        )
+
+        map_metadata = (
+            current_map.get("map", {})
+            if isinstance(current_map, dict)
+            else {}
+        )
+        allied_faction = (
+            map_metadata.get("allies", {}).get("name")
+            if isinstance(map_metadata, dict)
+            and isinstance(map_metadata.get("allies"), dict)
+            else None
+        )
+        axis_faction = (
+            map_metadata.get("axis", {}).get("name")
+            if isinstance(map_metadata, dict)
+            and isinstance(map_metadata.get("axis"), dict)
+            else None
+        )
+
+        raw_team = player.get("team") or player.get("side")
+        team = raw_team
+        normalized_team = str(raw_team or "").lower()
+        if normalized_team in ("allies", "allied") and allied_faction:
+            team = allied_faction
+        elif normalized_team == "axis" and axis_faction:
+            team = axis_faction
+
+        allied_score = game_state.get("allied_score")
+        axis_score = game_state.get("axis_score")
+        score = None
+        if allied_score is not None and axis_score is not None:
+            allied_label = str(allied_faction or "Alliés").upper()
+            axis_label = str(axis_faction or "Axe").upper()
+            score = f"{allied_label} {allied_score} | {axis_label} {axis_score}"
+
+        return {
+            "team": str(team).upper() if team not in (None, "") else None,
+            "map": str(map_name) if map_name not in (None, "") else None,
+            "mode": cls._display_mode(game_state, current_map),
+            "score": score,
+            "time_remaining": cls._display_time_remaining(game_state),
+        }
+
+    async def get_ticket_context(self, player_id: str) -> dict:
+        """Fetch and normalize the live details useful to an admin responder."""
+        live_stats, game_state = await asyncio.gather(
+            self._get_api_result("get_live_game_stats"),
+            self._get_api_result("get_gamestate"),
+        )
+        return self._build_ticket_context(live_stats, game_state, player_id)
 
     def set_message_callback(self, callback: Callable):
         self.message_callback = callback
@@ -321,12 +471,42 @@ class CRCONClient:
         )
 
     @staticmethod
-    def _clean_message(message: str) -> str:
+    def _clean_message(
+        message: str, player_name: Optional[str] = None, player_id: Optional[str] = None
+    ) -> str:
         if not message:
             return ""
-        # Older CRCON raw chat strings could suffix a Steam ID. Structured
-        # ``message`` values normally do not, but stripping it is harmless.
-        return re.sub(r"\(76561\d+\)", "", message).strip()
+        cleaned = " ".join(str(message).split())
+
+        # Raw CRCON fallback lines can duplicate data already shown in the
+        # ticket fields: ``Player: @admin report (player_id)``.
+        if player_name:
+            prefix_pattern = (
+                rf"^.*?{re.escape(str(player_name))}"
+                rf"(?:\([^)]*\))?\s*:\s*"
+            )
+            cleaned = re.sub(prefix_pattern, "", cleaned, count=1)
+        if player_id:
+            cleaned = re.sub(
+                rf"\s*\(\s*{re.escape(str(player_id))}\s*\)\s*$",
+                "",
+                cleaned,
+            )
+
+        # Keep backward compatibility for older Steam-only raw strings.
+        return re.sub(r"\s*\(76561\d+\)\s*$", "", cleaned).strip()
+
+    @staticmethod
+    def _extract_admin_report(message: str) -> Optional[str]:
+        """Return only the report text following an admin ping trigger."""
+        trigger = re.search(
+            r"(?:^|\s)[!@/]?admin(?:istrateur)?\b\s*[:,-]?\s*",
+            message,
+            flags=re.IGNORECASE,
+        )
+        if trigger is None:
+            return None
+        return message[trigger.end() :].strip()
 
     async def process_log_entry(self, entry: dict):
         """Route one CRCON structured CHAT log entry.
@@ -361,7 +541,7 @@ class CRCONClient:
             )
             return
 
-        full_message = self._clean_message(content)
+        full_message = self._clean_message(content, player_name, player_id)
         if player_id in self.active_threads:
             # Keep the latest display name in case it changed during a ticket.
             self.active_threads[player_id]["player_name"] = player_name
@@ -371,10 +551,16 @@ class CRCONClient:
                 )
             return
 
-        if "admin" in content.lower():
+        admin_report = self._extract_admin_report(full_message)
+        if admin_report is not None:
             self.closed_tickets.pop(player_id, None)
             if self.message_callback:
-                await self.message_callback(player_id, player_name, full_message)
+                await self.message_callback(
+                    player_id,
+                    player_name,
+                    admin_report,
+                    full_message,
+                )
 
     async def start_monitoring(self):
         """Continuously monitor this server's structured log WebSocket."""

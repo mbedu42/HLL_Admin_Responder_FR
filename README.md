@@ -14,8 +14,8 @@ Discord forum.
 - **Smart Prevention**: One ticket per player, prevents spam
 - **Auto Close**: Tickets close automatically after 90 minutes of inactivity
 - **Outage Tickets**: CRCON/API/log-stream failures create one deduplicated
-  Discord incident thread, ping admins, add diagnostic details, and close after
-  a verified recovery
+  Discord incident thread, ping the configured outage contacts, add diagnostic
+  details, and close after a verified recovery
 - **Background Service**: Run with systemd or tmux
 
 ## How It Works
@@ -35,7 +35,8 @@ Discord forum.
 
 Each CRCON client reports health transitions to its configured Discord forum.
 The first API, WebSocket, malformed-payload, or server-reported log-stream
-failure creates an `OUTAGE` thread and mentions that server's admin roles.
+failure creates an `OUTAGE` thread and mentions only that server's configured
+outage contacts.
 Repeated identical failures are counted without creating duplicate tickets. If
 the failure changes (for example, an HTTP 502 becomes "Log stream is not
 enabled"), the existing incident receives an update. After the WebSocket sends
@@ -135,6 +136,7 @@ Enter your prepared information:
 DISCORD_TOKEN=your_discord_bot_token
 DISCORD_GUILD_ID=your_discord_guild_id
 DISCORD_ADMIN_ROLES=role_id_1,role_id_2,role_id_3
+DISCORD_OUTAGE_USER_IDS=user_id_1,user_id_2
 
 # Dynamic array: each object is one complete game-server route
 GAME_SERVERS='[
@@ -184,6 +186,8 @@ Every object must contain:
 
 `name` is optional and controls the server label shown in Discord. A per-server
 `discord.admin_roles` array may override the global `DISCORD_ADMIN_ROLES` list.
+Likewise, `discord.outage_user_ids` may override `DISCORD_OUTAGE_USER_IDS`.
+Outage alerts mention these individual users instead of the ticket admin roles.
 The `.env` value is JSON: keep its outer single quotes and JSON double quotes.
 
 The old global `RCON_*`, `CRCON_BASE_URL`, `CRCON_API_TOKEN` and per-server URL

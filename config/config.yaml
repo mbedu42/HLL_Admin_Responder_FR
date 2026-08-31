@@ -2,6 +2,7 @@ discord:
   token: ${DISCORD_TOKEN}
   guild_id: ${DISCORD_GUILD_ID}
   admin_roles: ${DISCORD_ADMIN_ROLES}
+  outage_user_ids: ${DISCORD_OUTAGE_USER_IDS}
 
 # The dynamic server list lives in the GAME_SERVERS JSON array in .env.
 

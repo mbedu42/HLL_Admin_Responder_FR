@@ -62,7 +62,7 @@ class Config:
             else:
                 return default
 
-        if key.endswith("admin_roles"):
+        if key.endswith(("admin_roles", "outage_user_ids")):
             return self._as_list(value)
         return value
 
@@ -95,6 +95,9 @@ class Config:
                     "discord": {
                         "admin_channel_id": self.get("discord.admin_channel_id"),
                         "admin_roles": self.get("discord.admin_roles", []),
+                        "outage_user_ids": self.get(
+                            "discord.outage_user_ids", []
+                        ),
                     },
                 }
             ]
@@ -105,6 +108,7 @@ class Config:
         normalized: List[Dict[str, Any]] = []
         seen_ids = set()
         global_roles = self.get("discord.admin_roles", [])
+        global_outage_user_ids = self.get("discord.outage_user_ids", [])
 
         for index, raw_server in enumerate(raw_servers):
             if not isinstance(raw_server, dict):
@@ -177,6 +181,9 @@ class Config:
             roles = discord_config.get("admin_roles")
             if roles is None:
                 roles = global_roles
+            outage_user_ids = discord_config.get("outage_user_ids")
+            if outage_user_ids is None:
+                outage_user_ids = global_outage_user_ids
 
             normalized.append(
                 {
@@ -197,6 +204,7 @@ class Config:
                         **discord_config,
                         "admin_channel_id": channel_id,
                         "admin_roles": self._as_list(roles),
+                        "outage_user_ids": self._as_list(outage_user_ids),
                     },
                 }
             )

@@ -13,6 +13,33 @@ logger = logging.getLogger(__name__)
 TicketKey = Tuple[str, str]  # (server_id, player_id)
 PARIS_TIMEZONE = ZoneInfo("Europe/Paris")
 DISPLAY_DATETIME_FORMAT = "%Y-%m-%d %H:%M"
+DEFAULT_REPORT_TEXT = "Demande d'assistance administrateur"
+EMPTY_REPORT_TEXT = "Aucun détail fourni après la commande admin"
+
+
+def summarize_report_text(value: str, limit: int) -> str:
+    """Return a single-line Discord-safe summary with a predictable length."""
+    text = " ".join(str(value or DEFAULT_REPORT_TEXT).split())
+    text = text.replace("@", "@\u200b")
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1].rstrip()}…"
+
+
+def build_ticket_thread_name(
+    date_time: str, player_name: str, report_text: str, limit: int = 100
+) -> str:
+    """Keep the previous ticket title while appending the useful report text."""
+    prefix = f"{date_time} - {player_name} - "
+    remaining = max(1, limit - len(prefix))
+    return f"{prefix}{summarize_report_text(report_text, remaining)}"[:limit]
+
+
+def format_embed_value(value: object) -> str:
+    """Format extracted metadata like the compact values in the reference card."""
+    text = " ".join(str(value or "Non disponible").split())
+    text = text.replace("`", "'").replace("@", "@\u200b")
+    return f"`{text[:1000]}`"
 
 
 def format_paris_datetime(value) -> str:
@@ -167,6 +194,12 @@ class DiscordBot:
         roles = self.get_server(server_id)["discord"].get("admin_roles", [])
         return " ".join(f"<@&{role_id}>" for role_id in roles)
 
+    def get_outage_mentions(self, server_id: str) -> str:
+        user_ids = self.get_server(server_id)["discord"].get(
+            "outage_user_ids", []
+        )
+        return " ".join(f"<@{user_id}>" for user_id in user_ids)
+
     async def queue_health_event(self, server_id: str, event: dict):
         """Queue health transitions so CRCON monitoring never waits on Discord."""
         queued_event = dict(event)
@@ -243,7 +276,7 @@ class DiscordBot:
                 occurred_at = event.get("occurred_at") or discord.utils.utcnow()
                 date_time = format_paris_datetime(occurred_at)
                 server_name = self.get_server(server_id)["name"]
-                mentions = self.get_admin_mentions(server_id)
+                mentions = self.get_outage_mentions(server_id)
                 content = "🚨 **PANNE DU RESPONDER ADMIN** 🚨"
                 if mentions:
                     content = f"{content}\n{mentions}"
@@ -701,14 +734,13 @@ class DiscordBot:
             closure_source="auto_inactivity",
         )
 
-    async def _get_player_team(self, server_id: str, player_id: str):
-        for player in await self.get_client(server_id).get_players():
-            if player.get("player_id") == player_id:
-                return player.get("team")
-        return None
-
     async def handle_admin_request(
-        self, server_id: str, player_id: str, player_name: str, admin_message: str
+        self,
+        server_id: str,
+        player_id: str,
+        player_name: str,
+        admin_message: str,
+        full_admin_message: Optional[str] = None,
     ):
         await self.bot.wait_until_ready()
         ticket_key = (server_id, player_id)
@@ -740,7 +772,21 @@ class DiscordBot:
 
         now = datetime.now(PARIS_TIMEZONE)
         date_time = format_paris_datetime(now)
-        thread_name = f"{date_time} - {player_name}"[:100]
+        extracted_report_text = admin_message.strip()
+        full_message_text = (
+            str(full_admin_message).strip()
+            if full_admin_message is not None
+            else extracted_report_text
+        )
+        report_text = extracted_report_text or EMPTY_REPORT_TEXT
+        title_text = (
+            extracted_report_text
+            or full_message_text
+            or DEFAULT_REPORT_TEXT
+        )
+        thread_name = build_ticket_thread_name(
+            date_time, player_name, title_text
+        )
         mentions = self.get_admin_mentions(server_id)
         content = "🚨 **Nouveau ping MODO** 🚨"
         if mentions:
@@ -766,23 +812,41 @@ class DiscordBot:
             },
         )
 
+        game_context = await client.get_ticket_context(player_id)
         embed = discord.Embed(
-            title="🚨 Ping MODO 🚨",
+            title=(
+                "🚨 Ping MODO — "
+                f"{summarize_report_text(title_text, 220)}"
+            )[:256],
             color=discord.Color.red(),
             timestamp=now,
         )
-        embed.add_field(name="🎮 Serveur", value=self.get_server(server_id)["name"])
-        embed.add_field(name="👤 Joueur", value=player_name)
-        embed.add_field(name="🆔 Player ID", value=f"`{player_id}`", inline=False)
-        embed.add_field(name="🕐 Heure de Paris", value=date_time)
         embed.add_field(
-            name="💬 Message",
-            value=admin_message or "Demande d'assistance administrateur",
+            name="📝 Texte du signalement",
+            value=summarize_report_text(report_text, 1024),
             inline=False,
         )
-        team = await self._get_player_team(server_id, player_id)
-        if team:
-            embed.add_field(name="⚑ Équipe", value=str(team))
+        extracted_fields = (
+            ("🎮 Jeu / serveur", self.get_server(server_id)["name"]),
+            ("👤 Nom du plaignant", player_name),
+            ("🆔 Player ID", player_id),
+            ("⚑ Équipe actuelle", game_context.get("team")),
+            ("🗺️ Carte actuelle", game_context.get("map")),
+            ("⚔️ Mode de jeu", game_context.get("mode")),
+            ("⚖️ Score / objectifs", game_context.get("score")),
+            ("⏱️ Temps restant", game_context.get("time_remaining")),
+            ("🕐 Heure de Paris", date_time),
+            (
+                "💬 Message complet reçu",
+                full_message_text or DEFAULT_REPORT_TEXT,
+            ),
+        )
+        for field_name, field_value in extracted_fields:
+            embed.add_field(
+                name=field_name,
+                value=format_embed_value(field_value),
+                inline=False,
+            )
         await thread.send(embed=embed)
 
         controls = discord.Embed(

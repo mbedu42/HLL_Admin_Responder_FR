@@ -122,8 +122,10 @@ class CRCONPlayerIdTests(unittest.IsolatedAsyncioTestCase):
         admin_requests = []
         responses = []
 
-        async def on_admin(player_id, player_name, message):
-            admin_requests.append((player_id, player_name, message))
+        async def on_admin(player_id, player_name, message, full_message):
+            admin_requests.append(
+                (player_id, player_name, message, full_message)
+            )
 
         async def on_response(player_id, player_name, message, event_time):
             responses.append((player_id, player_name, message, event_time))
@@ -144,7 +146,14 @@ class CRCONPlayerIdTests(unittest.IsolatedAsyncioTestCase):
         await client.process_log_entry(entry)
         self.assertEqual(
             admin_requests,
-            [("76561190000000001", "SameName", "!admin besoin d'aide")],
+            [
+                (
+                    "76561190000000001",
+                    "SameName",
+                    "besoin d'aide",
+                    "!admin besoin d'aide",
+                )
+            ],
         )
 
         client.register_admin_thread("76561190000000001", {"player_name": "SameName"})
@@ -159,6 +168,105 @@ class CRCONPlayerIdTests(unittest.IsolatedAsyncioTestCase):
         entry["log"]["message"] = "!admin autre joueur"
         await client.process_log_entry(entry)
         self.assertEqual(admin_requests[-1][0], "76561190000000002")
+
+    async def test_extracts_report_from_raw_crossplay_chat(self):
+        client = CRCONClient(FakeConfig(), SERVER)
+        admin_requests = []
+
+        async def on_admin(*args):
+            admin_requests.append(args)
+
+        client.set_message_callback(on_admin)
+        await client.process_log_entry(
+            {
+                "id": "raw-1",
+                "log": {
+                    "action": "CHAT[Team]",
+                    "player_id_1": "00028700f0c249bea56accca47967c56",
+                    "player_name_1": "OhaxFR",
+                    "raw": (
+                        "OhaxFR: @admin Mister-Picklles93 qui TK volontairement "
+                        "(00028700f0c249bea56accca47967c56)"
+                    ),
+                },
+            }
+        )
+
+        self.assertEqual(
+            admin_requests,
+            [
+                (
+                    "00028700f0c249bea56accca47967c56",
+                    "OhaxFR",
+                    "Mister-Picklles93 qui TK volontairement",
+                    "@admin Mister-Picklles93 qui TK volontairement",
+                )
+            ],
+        )
+
+    async def test_preserves_a_bare_admin_command_as_the_full_message(self):
+        client = CRCONClient(FakeConfig(), SERVER)
+        admin_requests = []
+
+        async def on_admin(*args):
+            admin_requests.append(args)
+
+        client.set_message_callback(on_admin)
+        await client.process_log_entry(
+            {
+                "id": "bare-admin",
+                "log": {
+                    "action": "CHAT[Team]",
+                    "player_id_1": "player-1",
+                    "player_name_1": "Reporter",
+                    "message": "admin",
+                },
+            }
+        )
+
+        self.assertEqual(
+            admin_requests,
+            [("player-1", "Reporter", "", "admin")],
+        )
+
+    def test_normalizes_live_ticket_context(self):
+        context = CRCONClient._build_ticket_context(
+            {
+                "stats": [
+                    {
+                        "player": "Reporter",
+                        "player_id": "player-1",
+                        "team": "allies",
+                    }
+                ]
+            },
+            {
+                "current_map": {
+                    "id": "carentan_offensive_ger",
+                    "map": {
+                        "pretty_name": "Carentan",
+                        "allies": {"name": "us"},
+                        "axis": {"name": "ger"},
+                    },
+                },
+                "game_mode": "offensive",
+                "allied_score": 2,
+                "axis_score": 3,
+                "raw_time_remaining": "00:31:42",
+            },
+            "player-1",
+        )
+
+        self.assertEqual(
+            context,
+            {
+                "team": "US",
+                "map": "Carentan",
+                "mode": "Offensive",
+                "score": "US 2 | GER 3",
+                "time_remaining": "00:31:42",
+            },
+        )
 
     async def test_ignores_chat_without_player_id(self):
         client = CRCONClient(FakeConfig(), SERVER)

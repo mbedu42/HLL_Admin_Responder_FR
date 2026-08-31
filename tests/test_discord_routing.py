@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from discord_bot.bot import DiscordBot
+from discord_bot.bot import DiscordBot, build_ticket_thread_name
 
 
 class FakeClient:
@@ -36,14 +36,22 @@ class FakeConfig:
                 "name": "Classic",
                 "rcon": {"host": "game-1", "port": 7777, "password": "p1"},
                 "crcon": {"base_url": "https://ww2", "api_token": "a"},
-                "discord": {"admin_channel_id": "100", "admin_roles": ["10"]},
+                "discord": {
+                    "admin_channel_id": "100",
+                    "admin_roles": ["10"],
+                    "outage_user_ids": ["40", "50"],
+                },
             },
             {
                 "id": "vietnam",
                 "name": "Vietnam",
                 "rcon": {"host": "game-2", "port": 7778, "password": "p2"},
                 "crcon": {"base_url": "https://viet", "api_token": "b"},
-                "discord": {"admin_channel_id": "200", "admin_roles": ["20"]},
+                "discord": {
+                    "admin_channel_id": "200",
+                    "admin_roles": ["20"],
+                    "outage_user_ids": ["60"],
+                },
             },
         ]
 
@@ -62,6 +70,19 @@ class FakeOutageThread:
 
 
 class DiscordRoutingTests(unittest.IsolatedAsyncioTestCase):
+    def test_ticket_title_includes_a_clean_report_summary(self):
+        title = build_ticket_thread_name(
+            "2026-08-31 14:20",
+            "Reporter",
+            "Mister-Picklles93\nqui TK volontairement",
+        )
+
+        self.assertEqual(
+            title,
+            "2026-08-31 14:20 - Reporter - Mister-Picklles93 qui TK volontairement",
+        )
+        self.assertLessEqual(len(title), 100)
+
     async def test_registers_server_specific_callbacks_and_keys(self):
         clients = {server_id: FakeClient(server_id) for server_id in ("ww2", "vietnam")}
         bot = DiscordBot(FakeConfig(), clients)
@@ -73,6 +94,8 @@ class DiscordRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(bot.get_client("ww2"), clients["ww2"])
             self.assertEqual(bot.get_admin_mentions("ww2"), "<@&10>")
             self.assertEqual(bot.get_admin_mentions("vietnam"), "<@&20>")
+            self.assertEqual(bot.get_outage_mentions("ww2"), "<@40> <@50>")
+            self.assertEqual(bot.get_outage_mentions("vietnam"), "<@60>")
 
             bot.player_names[("ww2", "same-id")] = "Classic player"
             bot.player_names[("vietnam", "same-id")] = "Vietnam player"
