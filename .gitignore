@@ -32,6 +32,10 @@ wheels/
 # Logs
 *.log
 
+# Runtime state
+/data/active_tickets.json
+/data/.*.tmp
+
 # IDE
 .vscode/
 .idea/

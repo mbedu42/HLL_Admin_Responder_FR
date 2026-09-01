@@ -1,5 +1,9 @@
+import json
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from discord_bot.bot import DiscordBot, build_ticket_thread_name
 
@@ -10,6 +14,7 @@ class FakeClient:
         self.message_callback = None
         self.response_callback = None
         self.health_callback = None
+        self.active_threads = {}
 
     def set_message_callback(self, callback):
         self.message_callback = callback
@@ -20,12 +25,27 @@ class FakeClient:
     def set_health_callback(self, callback):
         self.health_callback = callback
 
+    def register_admin_thread(self, player_id, thread_info):
+        self.active_threads[player_id] = thread_info
+
+    def unregister_admin_thread(self, player_id):
+        self.active_threads.pop(player_id, None)
+
 
 class FakeConfig:
+    def __init__(self, state_file=None):
+        self.state_file = state_file or str(
+            Path(tempfile.gettempdir())
+            / f"hll-admin-test-state-{id(self)}.json"
+        )
+
     def get(self, key, default=None):
         values = {
             "tickets.auto_close_minutes": 90,
             "tickets.inactivity_check_interval_seconds": 60,
+            "tickets.state_file": self.state_file,
+            "discord.gateway_watchdog_interval_seconds": 1,
+            "discord.gateway_restart_after_seconds": 1,
         }
         return values.get(key, default)
 
@@ -145,6 +165,96 @@ class DiscordRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 thread.sent[0]["embed"].fields[1].value, "2 min 5 s"
             )
+        finally:
+            await bot.close()
+
+    async def test_restart_does_not_post_into_an_existing_outage_thread(self):
+        clients = {server_id: FakeClient(server_id) for server_id in ("ww2", "vietnam")}
+        bot = DiscordBot(FakeConfig(), clients)
+        thread = FakeOutageThread()
+        bot.outage_threads["ww2"] = thread
+        try:
+            delivered = await bot.deliver_health_event(
+                {"status": "outage", "server_id": "ww2"}
+            )
+
+            self.assertTrue(delivered)
+            self.assertEqual(thread.sent, [])
+            self.assertIs(bot.outage_threads["ww2"], thread)
+        finally:
+            await bot.close()
+
+    async def test_active_ticket_and_button_are_loaded_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "active-tickets.json"
+            config = FakeConfig(state_file)
+            key = ("vietnam", "player-42")
+
+            first_clients = {
+                server_id: FakeClient(server_id)
+                for server_id in ("ww2", "vietnam")
+            }
+            first = DiscordBot(config, first_clients)
+            try:
+                first.player_tickets[key] = True
+                first.player_names[key] = "Restarted player"
+                first.ticket_thread_ids[key] = 123456
+                first.thread_tickets[123456] = key
+                first.current_status_message[key] = 654321
+                first.status_messages[key] = [654321]
+                first.claimed_by[key] = "Moderator"
+                first.last_activity[key] = datetime(2026, 9, 1, 12, 30)
+                first._save_ticket_state()
+            finally:
+                await first.close()
+
+            saved = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(saved["version"], 1)
+            self.assertEqual(saved["tickets"][0]["thread_id"], 123456)
+            self.assertEqual(saved["tickets"][0]["status_message_id"], 654321)
+
+            second_clients = {
+                server_id: FakeClient(server_id)
+                for server_id in ("ww2", "vietnam")
+            }
+            second = DiscordBot(config, second_clients)
+            try:
+                self.assertTrue(second.player_tickets[key])
+                self.assertEqual(second.player_names[key], "Restarted player")
+                self.assertEqual(second.ticket_thread_ids[key], 123456)
+                self.assertEqual(second.thread_tickets[123456], key)
+                self.assertEqual(second.current_status_message[key], 654321)
+                self.assertEqual(second.claimed_by[key], "Moderator")
+                self.assertEqual(
+                    second_clients["vietnam"].active_threads["player-42"][
+                        "thread_id"
+                    ],
+                    123456,
+                )
+                self.assertEqual(len(second.bot.persistent_views), 1)
+                labels = [
+                    item.label for item in second.bot.persistent_views[0].children
+                ]
+                self.assertEqual(labels, ["Fermer le ticket"])
+
+                second._remove_ticket_state(key)
+                cleared = json.loads(state_file.read_text(encoding="utf-8"))
+                self.assertEqual(cleared["tickets"], [])
+            finally:
+                await second.close()
+
+    async def test_gateway_watchdog_closes_a_wedged_client(self):
+        clients = {
+            server_id: FakeClient(server_id)
+            for server_id in ("ww2", "vietnam")
+        }
+        bot = DiscordBot(FakeConfig(), clients)
+        try:
+            with patch(
+                "discord_bot.bot.time.monotonic", side_effect=[0.0, 2.0]
+            ), patch.object(bot.bot, "close", new_callable=AsyncMock) as close:
+                await bot.monitor_gateway_connection()
+                close.assert_awaited_once_with()
         finally:
             await bot.close()
 

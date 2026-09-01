@@ -44,7 +44,16 @@ async def main():
     tasks.append(asyncio.create_task(discord_bot.start(), name="discord"))
 
     try:
-        await asyncio.gather(*tasks)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finished = next(iter(done))
+        exception = finished.exception()
+        if exception is not None:
+            raise RuntimeError(
+                f"Critical task {finished.get_name()} failed"
+            ) from exception
+        raise RuntimeError(
+            f"Critical task {finished.get_name()} stopped unexpectedly"
+        )
     except asyncio.CancelledError:
         raise
     finally:

@@ -12,10 +12,12 @@ Discord forum.
 - **Discord Forum Posts**: Auto-creates tickets with tagging (NEW/REPLIED/CLOSED)
 - **Two-way Chat**: Reply in Discord → message sent to player in-game
 - **Smart Prevention**: One ticket per player, prevents spam
+- **Restart Resilience**: Active ticket routing and persistent Discord buttons
+  are restored automatically after a process or Gateway restart
 - **Auto Close**: Tickets close automatically after 90 minutes of inactivity
-- **Outage Tickets**: CRCON/API/log-stream failures create one deduplicated
-  Discord incident thread, ping the configured outage contacts, add diagnostic
-  details, and close after a verified recovery
+- **Outage Tickets**: sustained CRCON/API/log-stream failures create one
+  deduplicated Discord incident thread, ping the configured outage contacts,
+  and close after a verified recovery; short network blips stay silent
 - **Background Service**: Run with systemd or tmux
 
 ## How It Works
@@ -34,13 +36,18 @@ Discord forum.
 ### Outage Monitoring
 
 Each CRCON client reports health transitions to its configured Discord forum.
-The first API, WebSocket, malformed-payload, or server-reported log-stream
-failure creates an `OUTAGE` thread and mentions only that server's configured
-outage contacts.
-Repeated identical failures are counted without creating duplicate tickets. If
-the failure changes (for example, an HTTP 502 becomes "Log stream is not
-enabled"), the existing incident receives an update. After the WebSocket sends
-a valid payload, the bot posts the outage duration and error count, applies the
+API, WebSocket, malformed-payload, and server-reported log-stream failures first
+enter a pending state. By default, the failure must occur at least three times
+and remain continuous for 60 seconds before an `OUTAGE` thread is created and
+that server's configured outage contacts are mentioned. A short failure that
+recovers before confirmation is logged locally and never sent to Discord.
+
+A valid log payload proves immediate recovery. Because a quiet game server may
+have no new chat to send, a WebSocket that remains open for 30 seconds also
+proves the ticket stream healthy. Reconnects use exponential backoff up to 30
+seconds. Updates inside an already-known incident are silent by default, and a
+responder restart reuses the existing `OUTAGE` thread without posting another
+alert. On recovery, the bot posts the duration and error count, applies the
 `CLOSED` tag, and archives the incident.
 
 Discord cannot receive an alert while Discord itself is unreachable. Health
@@ -202,9 +209,35 @@ In `config/config.yaml` you can control the inactivity timer:
 tickets:
   auto_close_minutes: 90        # minutes of silence before a ticket closes
   inactivity_check_interval_seconds: 60
+  state_file: data/active_tickets.json
+
+discord:
+  gateway_watchdog_interval_seconds: 5
+  gateway_restart_after_seconds: 120
+
+crcon:
+  health_failure_threshold: 3
+  health_failure_grace_seconds: 60
+  health_stream_stable_seconds: 30
+  health_emit_updates: false
+  health_update_cooldown_seconds: 3600
+  ws_reconnect_initial_seconds: 3
+  ws_reconnect_max_seconds: 30
 ```
 
 The defaults close tickets after 90 minutes without any chat from the player or admins. Lower the number if you want faster cleanup, or raise it for longer-running investigations.
+
+Active tickets are saved atomically after creation, claim, chat activity, and
+closure. On startup, the bot restores the player-to-thread routing, reopens an
+auto-archived active thread, and registers the original claim/close button by
+its Discord message ID. Do not delete `data/active_tickets.json` while tickets
+are active.
+
+The Gateway watchdog handles a Discord client that is alive at the process
+level but stuck retrying a failed regional resume endpoint. After two minutes
+without an open Gateway WebSocket it closes the client; the systemd service
+then starts a clean process, which reloads the active-ticket file. Keep the
+service unit's `Restart=on-failure` setting enabled for this automatic recovery.
 
 > [!IMPORTANT]
 > - Save changes with `Ctrl`+`O` (then press `ENTER`)

@@ -45,11 +45,15 @@ class CRCONClient:
         self.ws_last_seen_id: Optional[str] = None
         self.ws_seen_ids: Set[str] = set()
 
-        # A health incident stays open until the log stream returns a valid
-        # payload. Repeated identical failures are counted but not re-alerted.
+        # Health failures first enter a pending state. Only a sustained series
+        # is announced, so a short CRCON restart or network hiccup does not
+        # create a Discord incident. An announced incident stays open until the
+        # log WebSocket is proven healthy again.
         self.outage_started_at: Optional[datetime] = None
         self.outage_failure_count = 0
         self._outage_fingerprints: Set[tuple] = set()
+        self._outage_announced = False
+        self._last_health_update_at: Optional[datetime] = None
         self._health_initialized = False
 
         logger.info(
@@ -60,6 +64,12 @@ class CRCONClient:
         return self.server_config.get("crcon", {}).get(
             key, self.config.get(f"crcon.{key}", default)
         )
+
+    def _server_bool_setting(self, key: str, default: bool) -> bool:
+        value = self._server_setting(key, default)
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
 
     async def create_session(self):
         if self.session is None or self.session.closed:
@@ -393,22 +403,89 @@ class CRCONClient:
             )
 
     async def report_outage(self, component: str, summary: str, detail: str):
-        """Emit only incident transitions, while counting repeated failures."""
+        """Confirm sustained failures before announcing an incident."""
         now = datetime.now(timezone.utc)
         clean_detail = str(detail or "No additional detail")[:2000]
         fingerprint = (component, summary, clean_detail)
-        self.outage_failure_count += 1
-        self._health_initialized = True
 
         if self.outage_started_at is None:
             self.outage_started_at = now
-            status = "outage"
-        elif fingerprint not in self._outage_fingerprints:
-            status = "update"
-        else:
-            return
+        self.outage_failure_count += 1
 
+        is_new_fingerprint = fingerprint not in self._outage_fingerprints
         self._outage_fingerprints.add(fingerprint)
+        elapsed_seconds = max(
+            0.0, (now - self.outage_started_at).total_seconds()
+        )
+
+        if not self._outage_announced:
+            failure_threshold = max(
+                1, int(self._server_setting("health_failure_threshold", 3))
+            )
+            grace_seconds = max(
+                0.0,
+                float(self._server_setting("health_failure_grace_seconds", 60)),
+            )
+            if (
+                self.outage_failure_count < failure_threshold
+                or elapsed_seconds < grace_seconds
+            ):
+                logger.warning(
+                    "Transient CRCON health failure pending: server=%s "
+                    "component=%s failures=%s/%s elapsed=%.1fs/%.1fs detail=%s",
+                    self.server_id,
+                    component,
+                    self.outage_failure_count,
+                    failure_threshold,
+                    elapsed_seconds,
+                    grace_seconds,
+                    clean_detail,
+                )
+                return
+
+            self._outage_announced = True
+            self._health_initialized = True
+            self._last_health_update_at = now
+            status = "outage"
+        elif not self._server_bool_setting("health_emit_updates", False):
+            logger.warning(
+                "CRCON outage still active; Discord update suppressed: "
+                "server=%s component=%s failures=%s detail=%s",
+                self.server_id,
+                component,
+                self.outage_failure_count,
+                clean_detail,
+            )
+            return
+        elif not is_new_fingerprint:
+            return
+        else:
+            cooldown_seconds = max(
+                0.0,
+                float(
+                    self._server_setting(
+                        "health_update_cooldown_seconds", 3600
+                    )
+                ),
+            )
+            since_last_update = (
+                (now - self._last_health_update_at).total_seconds()
+                if self._last_health_update_at
+                else cooldown_seconds
+            )
+            if since_last_update < cooldown_seconds:
+                logger.warning(
+                    "CRCON outage update in cooldown: server=%s component=%s "
+                    "failures=%s remaining=%.1fs",
+                    self.server_id,
+                    component,
+                    self.outage_failure_count,
+                    cooldown_seconds - since_last_update,
+                )
+                return
+            self._last_health_update_at = now
+            status = "update"
+
         await self._emit_health_event(
             {
                 "status": status,
@@ -424,8 +501,12 @@ class CRCONClient:
             }
         )
 
-    async def report_recovery(self):
-        """Close an active incident after a valid log-stream payload arrives."""
+    async def report_recovery(
+        self,
+        summary: str = "The CRCON log stream is reachable",
+        detail: str = "Admin-request monitoring is operational.",
+    ):
+        """Clear pending failures and close any announced incident."""
         if self.outage_started_at is None:
             if not self._health_initialized:
                 self._health_initialized = True
@@ -436,8 +517,8 @@ class CRCONClient:
                         "server_id": self.server_id,
                         "server_name": self.server_name,
                         "component": "CRCON log stream",
-                        "summary": "A valid CRCON log-stream payload was received",
-                        "detail": "Admin-request monitoring is operational.",
+                        "summary": summary,
+                        "detail": detail,
                         "endpoint": self.base_url,
                         "occurred_at": now,
                         "failure_count": 0,
@@ -449,19 +530,51 @@ class CRCONClient:
         now = datetime.now(timezone.utc)
         started_at = self.outage_started_at
         failure_count = self.outage_failure_count
+        outage_was_announced = self._outage_announced
         duration_seconds = max(0, int((now - started_at).total_seconds()))
 
         self.outage_started_at = None
         self.outage_failure_count = 0
         self._outage_fingerprints.clear()
+        self._outage_announced = False
+        self._last_health_update_at = None
+
+        if not outage_was_announced:
+            logger.info(
+                "Transient CRCON health failure cleared without alert: "
+                "server=%s failures=%s duration=%ss",
+                self.server_id,
+                failure_count,
+                duration_seconds,
+            )
+            if self._health_initialized:
+                return
+            self._health_initialized = True
+            await self._emit_health_event(
+                {
+                    "status": "healthy",
+                    "server_id": self.server_id,
+                    "server_name": self.server_name,
+                    "component": "CRCON log stream",
+                    "summary": summary,
+                    "detail": detail,
+                    "endpoint": self.base_url,
+                    "occurred_at": now,
+                    "failure_count": 0,
+                    "duration_seconds": 0,
+                }
+            )
+            return
+
+        self._health_initialized = True
         await self._emit_health_event(
             {
                 "status": "recovered",
                 "server_id": self.server_id,
                 "server_name": self.server_name,
                 "component": "CRCON log stream",
-                "summary": "A valid CRCON log-stream payload was received",
-                "detail": "Admin-request monitoring is operational again.",
+                "summary": summary,
+                "detail": detail,
                 "endpoint": self.base_url,
                 "occurred_at": now,
                 "started_at": started_at,
@@ -580,13 +693,11 @@ class CRCONClient:
                 continue
 
             try:
-                await self.monitor_via_websocket()
-                reconnect_delay = int(
-                    self._server_setting("ws_reconnect_initial_seconds", 3)
-                )
+                stream_was_healthy = await self.monitor_via_websocket()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                stream_was_healthy = False
                 logger.error(
                     "WebSocket loop error: server=%s error=%s", self.server_id, exc
                 )
@@ -597,6 +708,10 @@ class CRCONClient:
                 )
 
             if self.monitoring:
+                if stream_was_healthy:
+                    reconnect_delay = int(
+                        self._server_setting("ws_reconnect_initial_seconds", 3)
+                    )
                 logger.warning(
                     "WebSocket disconnected; reconnecting: server=%s delay=%ss",
                     self.server_id,
@@ -608,7 +723,8 @@ class CRCONClient:
     def stop_monitoring(self):
         self.monitoring = False
 
-    async def monitor_via_websocket(self):
+    async def monitor_via_websocket(self) -> bool:
+        """Run one WebSocket connection and report whether it became healthy."""
         await self.create_session()
         ws_url = self.base_url.replace("http://", "ws://", 1).replace(
             "https://", "wss://", 1
@@ -628,59 +744,103 @@ class CRCONClient:
             )
             logger.info("WebSocket stream started: server=%s", self.server_id)
             reported_stream_error = False
+            stream_healthy = asyncio.Event()
+            stable_seconds = max(
+                0.0,
+                float(self._server_setting("health_stream_stable_seconds", 30)),
+            )
 
-            while self.monitoring:
-                message = await websocket.receive()
-                if message.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        data = json.loads(message.data)
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning(
-                            "Invalid WebSocket payload: server=%s", self.server_id
-                        )
-                        reported_stream_error = True
-                        await self.report_outage(
-                            component="CRCON log stream",
-                            summary="CRCON returned an invalid WebSocket payload",
-                            detail="The response was not valid JSON.",
-                        )
-                        continue
-
-                    if not isinstance(data, dict):
-                        continue
-                    if data.get("error"):
-                        logger.error(
-                            "WebSocket server error: server=%s error=%s",
-                            self.server_id,
-                            data["error"],
-                        )
-                        reported_stream_error = True
-                        await self.report_outage(
-                            component="CRCON log stream",
-                            summary="CRCON rejected log streaming",
-                            detail=str(data["error"]),
-                        )
-                        await asyncio.sleep(1)
-                        continue
-
-                    reported_stream_error = False
-                    await self.report_recovery()
-                    if data.get("last_seen_id"):
-                        self.ws_last_seen_id = data["last_seen_id"]
-                    for entry in data.get("logs") or []:
-                        await self.process_log_entry(entry)
-                elif message.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.ERROR,
+            async def confirm_stable_connection():
+                await asyncio.sleep(stable_seconds)
+                if (
+                    self.monitoring
+                    and not websocket.closed
+                    and not reported_stream_error
                 ):
-                    if not reported_stream_error:
-                        await self.report_outage(
-                            component="CRCON log stream",
-                            summary="The CRCON WebSocket disconnected",
-                            detail=(
-                                f"message_type={message.type.name}; "
-                                f"close_code={websocket.close_code}"
+                    await self.report_recovery(
+                        summary="The CRCON log WebSocket remained connected",
+                        detail=(
+                            "The ticket log stream stayed open for "
+                            f"{stable_seconds:g} seconds."
+                        ),
+                    )
+                    stream_healthy.set()
+
+            stable_connection_task = asyncio.create_task(
+                confirm_stable_connection(),
+                name=f"crcon-stream-health-{self.server_id}",
+            )
+
+            try:
+                while self.monitoring:
+                    message = await websocket.receive()
+                    if message.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(message.data)
+                        except (json.JSONDecodeError, TypeError):
+                            logger.warning(
+                                "Invalid WebSocket payload: server=%s",
+                                self.server_id,
+                            )
+                            reported_stream_error = True
+                            await self.report_outage(
+                                component="CRCON log stream",
+                                summary=(
+                                    "CRCON returned an invalid WebSocket payload"
+                                ),
+                                detail="The response was not valid JSON.",
+                            )
+                            continue
+
+                        if not isinstance(data, dict):
+                            continue
+                        if data.get("error"):
+                            logger.error(
+                                "WebSocket server error: server=%s error=%s",
+                                self.server_id,
+                                data["error"],
+                            )
+                            reported_stream_error = True
+                            await self.report_outage(
+                                component="CRCON log stream",
+                                summary="CRCON rejected log streaming",
+                                detail=str(data["error"]),
+                            )
+                            await asyncio.sleep(1)
+                            continue
+
+                        reported_stream_error = False
+                        await self.report_recovery(
+                            summary=(
+                                "A valid CRCON log-stream payload was received"
                             ),
+                            detail="Admin-request monitoring is operational.",
                         )
-                    break
+                        stream_healthy.set()
+                        if data.get("last_seen_id"):
+                            self.ws_last_seen_id = data["last_seen_id"]
+                        for entry in data.get("logs") or []:
+                            await self.process_log_entry(entry)
+                    elif message.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
+                        if not reported_stream_error:
+                            await self.report_outage(
+                                component="CRCON log stream",
+                                summary="The CRCON WebSocket disconnected",
+                                detail=(
+                                    f"message_type={message.type.name}; "
+                                    f"close_code={websocket.close_code}"
+                                ),
+                            )
+                        break
+            finally:
+                stable_connection_task.cancel()
+                try:
+                    await stable_connection_task
+                except asyncio.CancelledError:
+                    pass
+
+            return stream_healthy.is_set()

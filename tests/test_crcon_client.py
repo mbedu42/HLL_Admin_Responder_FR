@@ -1,14 +1,18 @@
 import asyncio
 import json
 import unittest
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from crcon.client import CRCONClient
 
 
 class FakeConfig:
+    def __init__(self, values=None):
+        self.values = values or {}
+
     def get(self, key, default=None):
-        return default
+        return self.values.get(key, default)
 
 
 SERVER = {
@@ -77,8 +81,41 @@ class CRCONPlayerIdTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection_attempts, 2)
         sleep.assert_awaited_once_with(3)
 
-    async def test_health_events_are_deduplicated_updated_and_recovered(self):
+    async def test_unhealthy_websocket_reconnects_use_exponential_backoff(self):
         client = CRCONClient(FakeConfig(), SERVER)
+        client.test_connection = AsyncMock(return_value=True)
+        connection_attempts = 0
+
+        async def monitor_until_cancelled():
+            nonlocal connection_attempts
+            connection_attempts += 1
+            if connection_attempts <= 2:
+                return False
+            raise asyncio.CancelledError
+
+        client.monitor_via_websocket = monitor_until_cancelled
+        with patch("crcon.client.asyncio.sleep", new=AsyncMock()) as sleep:
+            with self.assertRaises(asyncio.CancelledError):
+                await client.start_monitoring()
+
+        self.assertEqual(connection_attempts, 3)
+        self.assertEqual(
+            [awaited.args for awaited in sleep.await_args_list],
+            [(3,), (6,)],
+        )
+
+    async def test_health_events_are_deduplicated_updated_and_recovered(self):
+        client = CRCONClient(
+            FakeConfig(
+                {
+                    "crcon.health_failure_threshold": 2,
+                    "crcon.health_failure_grace_seconds": 0,
+                    "crcon.health_emit_updates": True,
+                    "crcon.health_update_cooldown_seconds": 0,
+                }
+            ),
+            SERVER,
+        )
         events = []
 
         async def on_health(event):
@@ -116,6 +153,66 @@ class CRCONPlayerIdTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(events[-1]["failure_count"], 3)
         self.assertEqual(events[-1]["server_id"], "vietnam")
+
+    async def test_transient_failure_recovers_without_an_outage_event(self):
+        client = CRCONClient(FakeConfig(), SERVER)
+        events = []
+        client.set_health_callback(events.append)
+
+        # Establish normal operation, then simulate one short network failure.
+        await client.report_recovery()
+        events.clear()
+        await client.report_outage(
+            "CRCON API",
+            "Status endpoint unavailable",
+            "ClientOSError: broken pipe",
+        )
+        await client.report_recovery()
+
+        self.assertEqual(events, [])
+        self.assertIsNone(client.outage_started_at)
+        self.assertEqual(client.outage_failure_count, 0)
+
+    async def test_outage_requires_both_failure_count_and_grace_period(self):
+        client = CRCONClient(
+            FakeConfig(
+                {
+                    "crcon.health_failure_threshold": 2,
+                    "crcon.health_failure_grace_seconds": 60,
+                }
+            ),
+            SERVER,
+        )
+        events = []
+        client.set_health_callback(events.append)
+
+        for _ in range(2):
+            await client.report_outage("CRCON API", "Unavailable", "timeout")
+        self.assertEqual(events, [])
+
+        client.outage_started_at -= timedelta(seconds=61)
+        await client.report_outage("CRCON API", "Unavailable", "timeout")
+        self.assertEqual([event["status"] for event in events], ["outage"])
+
+    async def test_active_outage_updates_are_silent_by_default(self):
+        client = CRCONClient(
+            FakeConfig(
+                {
+                    "crcon.health_failure_threshold": 1,
+                    "crcon.health_failure_grace_seconds": 0,
+                }
+            ),
+            SERVER,
+        )
+        events = []
+        client.set_health_callback(events.append)
+
+        await client.report_outage("CRCON API", "Unavailable", "timeout")
+        await client.report_outage(
+            "CRCON log stream", "Disconnected", "close_code=1011"
+        )
+
+        self.assertEqual([event["status"] for event in events], ["outage"])
 
     async def test_routes_logs_and_ticket_state_by_player_id(self):
         client = CRCONClient(FakeConfig(), SERVER)

@@ -1,7 +1,11 @@
 import asyncio
+import json
 import logging
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -15,6 +19,8 @@ PARIS_TIMEZONE = ZoneInfo("Europe/Paris")
 DISPLAY_DATETIME_FORMAT = "%Y-%m-%d %H:%M"
 DEFAULT_REPORT_TEXT = "Demande d'assistance administrateur"
 EMPTY_REPORT_TEXT = "Aucun détail fourni après la commande admin"
+TICKET_STATE_VERSION = 1
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def summarize_report_text(value: str, limit: int) -> str:
@@ -142,6 +148,7 @@ class DiscordBot:
 
         self.active_threads: Dict[TicketKey, discord.Thread] = {}
         self.thread_tickets: Dict[int, TicketKey] = {}
+        self.ticket_thread_ids: Dict[TicketKey, int] = {}
         self.active_button_messages: Dict[TicketKey, discord.Message] = {}
         self.player_tickets: Dict[TicketKey, bool] = {}
         self.player_names: Dict[TicketKey, str] = {}
@@ -165,9 +172,33 @@ class DiscordBot:
         )
         self.inactivity_task: Optional[asyncio.Task] = None
 
+        state_file = Path(
+            str(
+                self.config.get(
+                    "tickets.state_file", "data/active_tickets.json"
+                )
+            )
+        ).expanduser()
+        if not state_file.is_absolute():
+            state_file = PROJECT_ROOT / state_file
+        self.ticket_state_file = state_file
+
+        self.gateway_watchdog_interval = max(
+            1,
+            int(self.config.get("discord.gateway_watchdog_interval_seconds", 5)),
+        )
+        self.gateway_restart_after = max(
+            self.gateway_watchdog_interval,
+            int(self.config.get("discord.gateway_restart_after_seconds", 120)),
+        )
+        self.gateway_watchdog_task: Optional[asyncio.Task] = None
+        self.ticket_restore_retry_task: Optional[asyncio.Task] = None
+        self._ticket_restore_complete = asyncio.Event()
+
         intents = discord.Intents.default()
         intents.message_content = True
         self.bot = commands.Bot(command_prefix="!", intents=intents)
+        self._load_ticket_state()
         self.setup_events()
 
         for server_id, client in self.crcon_clients.items():
@@ -180,6 +211,166 @@ class DiscordBot:
         logger.info(
             "Discord bot initialized for servers: %s", ", ".join(self.servers)
         )
+
+    @staticmethod
+    def _parse_last_activity(value: object) -> datetime:
+        if not value:
+            return datetime.utcnow()
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.utcnow()
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    def _ticket_state_payload(self) -> dict:
+        tickets = []
+        for ticket_key in sorted(self.player_tickets):
+            server_id, player_id = ticket_key
+            thread_id = self.ticket_thread_ids.get(ticket_key)
+            if thread_id is None:
+                thread = self.active_threads.get(ticket_key)
+                thread_id = getattr(thread, "id", None)
+            if thread_id is None:
+                logger.error(
+                    "Cannot persist ticket without thread ID: server=%s player_id=%s",
+                    server_id,
+                    player_id,
+                )
+                continue
+
+            tickets.append(
+                {
+                    "server_id": server_id,
+                    "player_id": player_id,
+                    "player_name": self.get_player_name(ticket_key),
+                    "thread_id": int(thread_id),
+                    "status_message_id": self.current_status_message.get(ticket_key),
+                    "claimed_by": self.claimed_by.get(ticket_key),
+                    "last_activity": self.last_activity.get(
+                        ticket_key, datetime.utcnow()
+                    ).isoformat(timespec="microseconds"),
+                }
+            )
+        return {"version": TICKET_STATE_VERSION, "tickets": tickets}
+
+    def _save_ticket_state(self):
+        """Atomically save every active ticket before a process can restart."""
+        self.ticket_state_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary_file = self.ticket_state_file.with_name(
+            f".{self.ticket_state_file.name}.{os.getpid()}.tmp"
+        )
+        payload = self._ticket_state_payload()
+        try:
+            with open(temporary_file, "w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2)
+                file.write("\n")
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_file, self.ticket_state_file)
+        except Exception:
+            try:
+                temporary_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logger.exception(
+                "Failed to persist active tickets to %s", self.ticket_state_file
+            )
+            raise
+
+    def _load_ticket_state(self):
+        if not self.ticket_state_file.exists():
+            self._ticket_restore_complete.set()
+            return
+
+        try:
+            with open(self.ticket_state_file, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except (OSError, json.JSONDecodeError):
+            logger.exception(
+                "Could not read persisted tickets from %s; leaving the file untouched",
+                self.ticket_state_file,
+            )
+            self._ticket_restore_complete.set()
+            return
+
+        if not isinstance(payload, dict):
+            logger.error(
+                "Invalid ticket state root in %s; expected an object",
+                self.ticket_state_file,
+            )
+            self._ticket_restore_complete.set()
+            return
+
+        if payload.get("version") != TICKET_STATE_VERSION:
+            logger.error(
+                "Unsupported ticket state version in %s: %s",
+                self.ticket_state_file,
+                payload.get("version"),
+            )
+            self._ticket_restore_complete.set()
+            return
+
+        restored = 0
+        for record in payload.get("tickets", []):
+            try:
+                server_id = str(record["server_id"])
+                player_id = str(record["player_id"])
+                if server_id not in self.servers or not player_id:
+                    raise ValueError("unknown server or empty player ID")
+                thread_id = int(record["thread_id"])
+                raw_status_message_id = record.get("status_message_id")
+                status_message_id = (
+                    int(raw_status_message_id)
+                    if raw_status_message_id is not None
+                    else None
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.error("Ignoring invalid persisted ticket %r: %s", record, exc)
+                continue
+
+            ticket_key = (server_id, player_id)
+            player_name = str(record.get("player_name") or "Joueur inconnu")
+            self.player_tickets[ticket_key] = True
+            self.player_names[ticket_key] = player_name
+            self.ticket_thread_ids[ticket_key] = thread_id
+            self.thread_tickets[thread_id] = ticket_key
+            self.last_activity[ticket_key] = self._parse_last_activity(
+                record.get("last_activity")
+            )
+
+            claimed_by = record.get("claimed_by")
+            if claimed_by:
+                self.claimed_by[ticket_key] = str(claimed_by)
+            if status_message_id is not None:
+                self.current_status_message[ticket_key] = status_message_id
+                self.status_messages[ticket_key] = [status_message_id]
+                view = (
+                    CloseTicketView(ticket_key, self)
+                    if claimed_by
+                    else ClaimTicketView(ticket_key, self)
+                )
+                self.bot.add_view(view, message_id=status_message_id)
+
+            self.get_client(server_id).register_admin_thread(
+                player_id,
+                {
+                    "thread_id": thread_id,
+                    "player_id": player_id,
+                    "player_name": player_name,
+                },
+            )
+            restored += 1
+
+        if restored:
+            logger.info(
+                "Loaded %s active ticket(s) from %s",
+                restored,
+                self.ticket_state_file,
+            )
+        else:
+            self._ticket_restore_complete.set()
 
     def get_client(self, server_id: str):
         return self.crcon_clients[server_id]
@@ -199,6 +390,181 @@ class DiscordBot:
             "outage_user_ids", []
         )
         return " ".join(f"<@{user_id}>" for user_id in user_ids)
+
+    async def _wait_for_ticket_restore(self):
+        await self.bot.wait_until_ready()
+        await self._ticket_restore_complete.wait()
+
+    async def _fetch_ticket_thread(
+        self, ticket_key: TicketKey
+    ) -> Optional[discord.Thread]:
+        thread = self.active_threads.get(ticket_key)
+        if thread is not None:
+            return thread
+
+        thread_id = self.ticket_thread_ids.get(ticket_key)
+        if thread_id is None:
+            return None
+        channel = self.bot.get_channel(thread_id)
+        if channel is None:
+            channel = await self.bot.fetch_channel(thread_id)
+        if not isinstance(channel, discord.Thread):
+            logger.error(
+                "Persisted ticket channel is not a thread: ticket=%s channel_id=%s type=%s",
+                ticket_key,
+                thread_id,
+                type(channel).__name__,
+            )
+            return None
+
+        self.active_threads[ticket_key] = channel
+        self.thread_tickets[channel.id] = ticket_key
+        return channel
+
+    async def restore_persisted_tickets(self):
+        """Reconnect saved tickets to Discord objects after READY."""
+        changed = False
+        for ticket_key in list(self.player_tickets):
+            if (
+                ticket_key in self.active_threads
+                and ticket_key in self.active_button_messages
+            ):
+                continue
+            server_id, player_id = ticket_key
+            player_name = self.get_player_name(ticket_key)
+            try:
+                thread = await self._fetch_ticket_thread(ticket_key)
+                if thread is None:
+                    logger.warning(
+                        "Persisted ticket thread is unavailable: ticket=%s",
+                        ticket_key,
+                    )
+                    self.get_client(server_id).unregister_admin_thread(player_id)
+                    self._remove_ticket_state(ticket_key, persist=False)
+                    changed = True
+                    continue
+                if thread.locked:
+                    logger.warning(
+                        "Dropping persisted ticket whose thread is locked: ticket=%s thread_id=%s",
+                        ticket_key,
+                        thread.id,
+                    )
+                    self.get_client(server_id).unregister_admin_thread(player_id)
+                    self._remove_ticket_state(ticket_key, persist=False)
+                    changed = True
+                    continue
+                if thread.archived:
+                    await thread.edit(archived=False)
+
+                self.get_client(server_id).register_admin_thread(
+                    player_id,
+                    {
+                        "thread_id": thread.id,
+                        "player_id": player_id,
+                        "player_name": player_name,
+                    },
+                )
+
+                status_message = None
+                status_message_id = self.current_status_message.get(ticket_key)
+                if status_message_id is not None:
+                    try:
+                        status_message = await thread.fetch_message(status_message_id)
+                    except discord.NotFound:
+                        logger.warning(
+                            "Status message missing; recreating controls: ticket=%s message_id=%s",
+                            ticket_key,
+                            status_message_id,
+                        )
+
+                claimer = self.claimed_by.get(ticket_key)
+                description = f"Ticket de **{player_name}** — en attente"
+                view: discord.ui.View = ClaimTicketView(ticket_key, self)
+                if claimer:
+                    description = (
+                        f"Ticket de **{player_name}** — pris en charge par **{claimer}**"
+                    )
+                    view = CloseTicketView(ticket_key, self)
+
+                if status_message is None:
+                    controls = discord.Embed(
+                        title="🎛️ Statut du ticket",
+                        description=description,
+                        color=discord.Color.blue(),
+                        timestamp=discord.utils.utcnow(),
+                    )
+                    status_message = await thread.send(embed=controls, view=view)
+                    self.current_status_message[ticket_key] = status_message.id
+                    self.status_messages[ticket_key] = [status_message.id]
+                    changed = True
+                else:
+                    # Reattach components in case Discord retained the message while
+                    # the previous process disappeared between state transitions.
+                    await status_message.edit(view=view)
+
+                self.active_button_messages[ticket_key] = status_message
+                self.bot.add_view(view, message_id=status_message.id)
+                logger.info(
+                    "Restored active ticket: server=%s player_id=%s thread_id=%s message_id=%s",
+                    server_id,
+                    player_id,
+                    thread.id,
+                    status_message.id,
+                )
+            except discord.NotFound:
+                logger.warning(
+                    "Persisted ticket no longer exists in Discord: ticket=%s",
+                    ticket_key,
+                )
+                self.get_client(server_id).unregister_admin_thread(player_id)
+                self._remove_ticket_state(ticket_key, persist=False)
+                changed = True
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                # Keep the durable entry. A later READY/restart can try again.
+                logger.error(
+                    "Could not restore persisted ticket %s yet: %s", ticket_key, exc
+                )
+
+        if changed:
+            self._save_ticket_state()
+
+    async def monitor_ticket_restoration(self):
+        """Retry transient Discord REST failures without dropping durable state."""
+        while not self.bot.is_closed():
+            unresolved = [
+                ticket_key
+                for ticket_key in self.player_tickets
+                if ticket_key not in self.active_threads
+                or ticket_key not in self.active_button_messages
+            ]
+            if not unresolved:
+                return
+            await asyncio.sleep(30)
+            try:
+                await self.restore_persisted_tickets()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Unexpected error while retrying persisted ticket restoration"
+                )
+
+    async def monitor_gateway_connection(self):
+        """Exit a wedged Discord client so the service manager can heal it."""
+        disconnected_since = time.monotonic()
+        while not self.bot.is_closed():
+            websocket = getattr(self.bot, "ws", None)
+            if websocket is not None and getattr(websocket, "open", False):
+                disconnected_since = time.monotonic()
+            elif time.monotonic() - disconnected_since >= self.gateway_restart_after:
+                logger.critical(
+                    "Discord Gateway unavailable for at least %ss; closing the client "
+                    "so the service can restart on a fresh Gateway endpoint",
+                    self.gateway_restart_after,
+                )
+                await self.bot.close()
+                return
+            await asyncio.sleep(self.gateway_watchdog_interval)
 
     async def queue_health_event(self, server_id: str, event: dict):
         """Queue health transitions so CRCON monitoring never waits on Discord."""
@@ -268,6 +634,19 @@ class DiscordBot:
         existing_incident = thread is not None
 
         if status in ("outage", "update"):
+            # On process restart, setup_forum_tags() restores an already-open
+            # outage thread while the CRCON client's in-memory health counters
+            # start fresh. Do not post a duplicate "update" when the sustained
+            # outage is confirmed again.
+            if status == "outage" and existing_incident:
+                logger.info(
+                    "Existing outage ticket already represents incident; "
+                    "duplicate alert suppressed: server=%s thread_id=%s",
+                    server_id,
+                    thread.id,
+                )
+                return True
+
             if thread is None:
                 channel = await self._get_forum(server_id)
                 if channel is None:
@@ -423,7 +802,31 @@ class DiscordBot:
         @self.bot.event
         async def on_ready():
             logger.info("%s connected to Discord", self.bot.user)
-            await self.setup_forum_tags()
+            try:
+                try:
+                    await self.setup_forum_tags()
+                except discord.HTTPException as exc:
+                    logger.error("Forum setup failed during READY: %s", exc)
+                await self.restore_persisted_tickets()
+            finally:
+                # Never deadlock CRCON callbacks if one restoration request
+                # failed. Durable records remain available for another retry.
+                self._ticket_restore_complete.set()
+            if (
+                any(
+                    ticket_key not in self.active_threads
+                    or ticket_key not in self.active_button_messages
+                    for ticket_key in self.player_tickets
+                )
+                and (
+                    not self.ticket_restore_retry_task
+                    or self.ticket_restore_retry_task.done()
+                )
+            ):
+                self.ticket_restore_retry_task = asyncio.create_task(
+                    self.monitor_ticket_restoration(),
+                    name="discord-ticket-restoration",
+                )
             if not self.inactivity_task or self.inactivity_task.done():
                 self.inactivity_task = asyncio.create_task(
                     self.monitor_ticket_inactivity()
@@ -432,6 +835,10 @@ class DiscordBot:
                 self.health_event_task = asyncio.create_task(
                     self.monitor_health_events(), name="discord-health-alerts"
                 )
+
+        @self.bot.event
+        async def on_disconnect():
+            logger.warning("Discord Gateway disconnected")
 
         @self.bot.event
         async def on_message(message):
@@ -542,8 +949,6 @@ class DiscordBot:
         player_name = self.get_player_name(ticket_key)
         claimer = interaction.user.display_name
         try:
-            self.claimed_by[ticket_key] = claimer
-            self.last_activity[ticket_key] = datetime.utcnow()
             embed = discord.Embed(
                 title="🎛️ Statut du ticket",
                 description=(
@@ -555,9 +960,12 @@ class DiscordBot:
             await interaction.response.edit_message(
                 embed=embed, view=CloseTicketView(ticket_key, self)
             )
+            self.claimed_by[ticket_key] = claimer
+            self.last_activity[ticket_key] = datetime.utcnow()
             self.active_button_messages[ticket_key] = interaction.message
             self.current_status_message[ticket_key] = interaction.message.id
             self.status_messages[ticket_key] = [interaction.message.id]
+            self._save_ticket_state()
 
             server_id, player_id = ticket_key
             sent = await self.get_client(server_id).send_message_to_player(
@@ -591,8 +999,8 @@ class DiscordBot:
             else self.active_threads.get(ticket_key)
         )
         try:
-            if thread:
-                await self.apply_forum_tag(ticket_key[0], thread, "CLOSED")
+            # Acknowledge within Discord's three-second interaction window.
+            await interaction.response.defer()
             view.clear_items()
             embed = discord.Embed(
                 title="🎛️ Statut du ticket",
@@ -603,7 +1011,7 @@ class DiscordBot:
                 color=discord.Color.green(),
                 timestamp=discord.utils.utcnow(),
             )
-            await interaction.response.edit_message(embed=embed, view=None)
+            await interaction.edit_original_response(embed=embed, view=None)
             await self.finalize_ticket_close(
                 ticket_key,
                 thread,
@@ -620,10 +1028,13 @@ class DiscordBot:
                     "Impossible de fermer ce ticket.", ephemeral=True
                 )
 
-    def _remove_ticket_state(self, ticket_key: TicketKey):
+    def _remove_ticket_state(self, ticket_key: TicketKey, *, persist: bool = True):
         thread = self.active_threads.pop(ticket_key, None)
-        if thread:
-            self.thread_tickets.pop(thread.id, None)
+        thread_id = self.ticket_thread_ids.pop(ticket_key, None)
+        if thread is not None:
+            thread_id = thread.id
+        if thread_id is not None:
+            self.thread_tickets.pop(thread_id, None)
         self.player_tickets.pop(ticket_key, None)
         self.player_names.pop(ticket_key, None)
         self.active_button_messages.pop(ticket_key, None)
@@ -631,6 +1042,8 @@ class DiscordBot:
         self.current_status_message.pop(ticket_key, None)
         self.claimed_by.pop(ticket_key, None)
         self.last_activity.pop(ticket_key, None)
+        if persist:
+            self._save_ticket_state()
 
     async def finalize_ticket_close(
         self,
@@ -676,7 +1089,7 @@ class DiscordBot:
         )
 
     async def monitor_ticket_inactivity(self):
-        await self.bot.wait_until_ready()
+        await self._wait_for_ticket_restore()
         inactivity_window = timedelta(minutes=self.auto_close_minutes)
         while not self.bot.is_closed():
             try:
@@ -692,7 +1105,17 @@ class DiscordBot:
             await asyncio.sleep(self.inactivity_check_interval)
 
     async def _close_ticket_for_inactivity(self, ticket_key: TicketKey):
-        thread = self.active_threads.get(ticket_key)
+        try:
+            thread = await self._fetch_ticket_thread(ticket_key)
+        except discord.NotFound:
+            thread = None
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            logger.error(
+                "Keeping inactive ticket because its thread could not be fetched: %s: %s",
+                ticket_key,
+                exc,
+            )
+            return
         if not thread:
             self._remove_ticket_state(ticket_key)
             return
@@ -742,13 +1165,21 @@ class DiscordBot:
         admin_message: str,
         full_admin_message: Optional[str] = None,
     ):
-        await self.bot.wait_until_ready()
+        await self._wait_for_ticket_restore()
         ticket_key = (server_id, player_id)
         self.player_names[ticket_key] = player_name
         client = self.get_client(server_id)
 
         if self.player_tickets.get(ticket_key):
-            thread = self.active_threads.get(ticket_key)
+            try:
+                thread = await self._fetch_ticket_thread(ticket_key)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                logger.error(
+                    "Could not fetch existing ticket for additional message %s: %s",
+                    ticket_key,
+                    exc,
+                )
+                thread = None
             if thread and admin_message.strip():
                 embed = discord.Embed(
                     title="💬 Message additionnel du joueur",
@@ -759,6 +1190,7 @@ class DiscordBot:
                 embed.set_footer(text=f"Joueur : {player_name}")
                 await thread.send(embed=embed)
                 self.last_activity[ticket_key] = datetime.utcnow()
+                self._save_ticket_state()
             await client.send_message_to_player(
                 player_id,
                 player_name,
@@ -801,6 +1233,7 @@ class DiscordBot:
 
         self.player_tickets[ticket_key] = True
         self.active_threads[ticket_key] = thread
+        self.ticket_thread_ids[ticket_key] = thread.id
         self.thread_tickets[thread.id] = ticket_key
         self.last_activity[ticket_key] = datetime.utcnow()
         client.register_admin_thread(
@@ -811,6 +1244,9 @@ class DiscordBot:
                 "player_name": player_name,
             },
         )
+        # Persist as soon as Discord has created the thread. If the process
+        # stops before controls are sent, startup restoration creates them.
+        self._save_ticket_state()
 
         game_context = await client.get_ticket_context(player_id)
         embed = discord.Embed(
@@ -861,6 +1297,7 @@ class DiscordBot:
         self.active_button_messages[ticket_key] = button_message
         self.current_status_message[ticket_key] = button_message.id
         self.status_messages[ticket_key] = [button_message.id]
+        self._save_ticket_state()
 
         await client.send_message_to_player(
             player_id,
@@ -883,9 +1320,13 @@ class DiscordBot:
         message: str,
         event_time: str,
     ):
+        await self._wait_for_ticket_restore()
         ticket_key = (server_id, player_id)
         self.player_names[ticket_key] = player_name
-        thread = self.active_threads.get(ticket_key)
+        try:
+            thread = await self._fetch_ticket_thread(ticket_key)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            thread = None
         if not thread:
             await self.handle_admin_request(
                 server_id, player_id, player_name, message
@@ -932,6 +1373,7 @@ class DiscordBot:
                 self.current_status_message[ticket_key] = status_message.id
                 self.status_messages[ticket_key] = [status_message.id]
             self.last_activity[ticket_key] = datetime.utcnow()
+            self._save_ticket_state()
         except (discord.NotFound, discord.Forbidden):
             self._remove_ticket_state(ticket_key)
             self.get_client(server_id).unregister_admin_thread(player_id)
@@ -990,17 +1432,33 @@ class DiscordBot:
                 self.active_button_messages[ticket_key] = status_message
                 self.current_status_message[ticket_key] = status_message.id
                 self.status_messages[ticket_key] = [status_message.id]
+        self._save_ticket_state()
 
     async def start(self):
         token = self.config.get("discord.token")
         if not token:
             raise ValueError("Discord token not found in configuration")
-        await self.bot.start(token)
+        self.gateway_watchdog_task = asyncio.create_task(
+            self.monitor_gateway_connection(), name="discord-gateway-watchdog"
+        )
+        try:
+            await self.bot.start(token)
+        finally:
+            if self.gateway_watchdog_task and not self.gateway_watchdog_task.done():
+                self.gateway_watchdog_task.cancel()
+            if self.gateway_watchdog_task:
+                await asyncio.gather(
+                    self.gateway_watchdog_task, return_exceptions=True
+                )
 
     async def close(self):
         if self.inactivity_task:
             self.inactivity_task.cancel()
         if self.health_event_task:
             self.health_event_task.cancel()
+        if self.gateway_watchdog_task:
+            self.gateway_watchdog_task.cancel()
+        if self.ticket_restore_retry_task:
+            self.ticket_restore_retry_task.cancel()
         if not self.bot.is_closed():
             await self.bot.close()

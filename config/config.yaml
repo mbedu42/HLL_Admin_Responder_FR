@@ -3,14 +3,31 @@ discord:
   guild_id: ${DISCORD_GUILD_ID}
   admin_roles: ${DISCORD_ADMIN_ROLES}
   outage_user_ids: ${DISCORD_OUTAGE_USER_IDS}
+  # Force a clean service restart if discord.py is stuck on a dead regional
+  # resume endpoint. The systemd unit restarts failed processes automatically.
+  gateway_watchdog_interval_seconds: 5
+  gateway_restart_after_seconds: 120
 
 # The dynamic server list lives in the GAME_SERVERS JSON array in .env.
 
 tickets:
   auto_close_minutes: 90
   inactivity_check_interval_seconds: 60
+  # Active thread/message/player routing is written atomically to this file.
+  state_file: data/active_tickets.json
 
 crcon:
+  # Require both repeated failures and one minute of continuous degradation
+  # before creating an OUTAGE ticket. A healthy WebSocket clears the pending
+  # failures without notifying Discord.
+  health_failure_threshold: 3
+  health_failure_grace_seconds: 60
+  # Quiet servers may not produce log payloads for a while. An open stream is
+  # considered healthy after this interval even if no player has chatted.
+  health_stream_stable_seconds: 30
+  # Keep the incident thread quiet while a known outage remains active.
+  health_emit_updates: false
+  health_update_cooldown_seconds: 3600
   ws_reconnect_initial_seconds: 3
   ws_reconnect_max_seconds: 30
 
